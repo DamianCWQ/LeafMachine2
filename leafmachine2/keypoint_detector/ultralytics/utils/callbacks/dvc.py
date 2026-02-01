@@ -14,10 +14,10 @@ try:
     from importlib.metadata import version
     from pathlib import Path
 
-    import pkg_resources as pkg
+    from packaging.version import parse as _parse_version
 
     ver = version('dvclive')
-    if pkg.parse_version(ver) < pkg.parse_version('2.11.0'):
+    if _parse_version(ver) < _parse_version('2.11.0'):
         LOGGER.debug(f'DVCLive is detected but version {ver} is incompatible (>=2.11 required).')
         dvclive = None  # noqa: F811
 

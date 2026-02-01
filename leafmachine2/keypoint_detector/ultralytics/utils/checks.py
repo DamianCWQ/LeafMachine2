@@ -14,7 +14,13 @@ from typing import Optional
 
 import cv2
 import numpy as np
-import pkg_resources as pkg
+try:
+    from importlib.metadata import version as _version, PackageNotFoundError
+except Exception:
+    from importlib_metadata import version as _version, PackageNotFoundError  # type: ignore
+
+from packaging.version import parse as _parse_version
+from packaging.requirements import Requirement
 import psutil
 import requests
 import torch
@@ -121,13 +127,13 @@ def check_version(current: str = '0.0.0',
         # check if current version is between 20.04 (inclusive) and 22.04 (exclusive)
         check_version(current='21.10', required='>20.04,<22.04')
     """
-    current = pkg.parse_version(current)
+    current = _parse_version(current)
     constraints = re.findall(r'([<>!=]{1,2}\s*\d+\.\d+)', required) or [f'>={required}']
 
     result = True
     for constraint in constraints:
         op, version = re.match(r'([<>!=]{1,2})\s*(\d+\.\d+)', constraint).groups()
-        version = pkg.parse_version(version)
+        version = _parse_version(version)
         if op == '==' and current != version:
             result = False
         elif op == '!=' and current == version:
@@ -177,7 +183,7 @@ def check_pip_update_available():
         with contextlib.suppress(Exception):
             from ultralytics import __version__
             latest = check_latest_pypi_version()
-            if pkg.parse_version(__version__) < pkg.parse_version(latest):  # update is available
+            if _parse_version(__version__) < _parse_version(latest):  # update is available
                 LOGGER.info(f'New https://pypi.org/project/ultralytics/{latest} available 😃 '
                             f"Update with 'pip install -U ultralytics'")
                 return True
@@ -259,8 +265,18 @@ def check_requirements(requirements=ROOT.parent / 'requirements.txt', exclude=()
     if isinstance(requirements, Path):  # requirements.txt file
         file = requirements.resolve()
         assert file.exists(), f'{prefix} {file} not found, check failed.'
+        requirements = []
         with file.open() as f:
-            requirements = [f'{x.name}{x.specifier}' for x in pkg.parse_requirements(f) if x.name not in exclude]
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith('#'):
+                    continue
+                try:
+                    req = Requirement(line)
+                except Exception:
+                    continue
+                if req.name not in exclude:
+                    requirements.append(f'{req.name}{req.specifier}')
     elif isinstance(requirements, str):
         requirements = [requirements]
 
@@ -268,14 +284,18 @@ def check_requirements(requirements=ROOT.parent / 'requirements.txt', exclude=()
     for r in requirements:
         r_stripped = r.split('/')[-1].replace('.git', '')  # replace git+https://org/repo.git -> 'repo'
         try:
-            pkg.require(r_stripped)  # exception if requirements not met
-        except pkg.DistributionNotFound:
-            try:  # attempt to import (slower but more accurate)
-                import importlib
-                importlib.import_module(next(pkg.parse_requirements(r_stripped)).name)
-            except ImportError:
-                pkgs.append(r)
-        except pkg.VersionConflict:
+            req = Requirement(r_stripped)
+            try:
+                inst_ver = _version(req.name)
+                if req.specifier and not req.specifier.contains(inst_ver, prereleases=True):
+                    pkgs.append(r)
+            except PackageNotFoundError:
+                try:  # attempt to import (slower but more accurate)
+                    import importlib
+                    importlib.import_module(req.name)
+                except ImportError:
+                    pkgs.append(r)
+        except Exception:
             pkgs.append(r)
 
     s = ' '.join(f'"{x}"' for x in pkgs)  # console string

@@ -6,10 +6,10 @@ import numpy as np
 from concurrent.futures import ProcessPoolExecutor
 
 class HideComponents:
-    def __init__(self, cfg, Dirs, Project, base_dir, label_files):
+    def __init__(self, cfg, dir_images, dir_save, base_dir, label_files):
         self.cfg = cfg
-        self.Dirs = Dirs
-        self.Project = Project
+        self.dir_images = dir_images
+        self.dir_save = dir_save
         self.base_dir = base_dir
         self.label_files = label_files
         self.class_names = {
@@ -43,9 +43,9 @@ class HideComponents:
 
             # Try to load the image
             try:
-                full_image = cv2.imread(os.path.join(self.Project.dir_images, f"{file_name}.jpg"))
+                full_image = cv2.imread(os.path.join(self.dir_images, f"{file_name}.jpg"))
             except:
-                full_image = cv2.imread(os.path.join(self.Project.dir_images, f"{file_name}.jpeg"))
+                full_image = cv2.imread(os.path.join(self.dir_images, f"{file_name}.jpeg"))
             
             if full_image is None:
                 continue
@@ -75,11 +75,11 @@ class HideComponents:
                     if class_name:
                         self.file_counts[file_name][class_name] += 1
 
-            save_path = os.path.join(self.Dirs.censor_archival_components, f"{file_name}.jpg")
+            save_path = os.path.join(self.dir_save, f"{file_name}.jpg")
             cv2.imwrite(save_path, full_image)
 
-def process_files(cfg, Dirs, Project, base_dir, label_files):
-    detector = HideComponents(cfg, Dirs, Project, base_dir, label_files)
+def process_files(cfg, dir_images, dir_save, base_dir, label_files):
+    detector = HideComponents(cfg, dir_images, dir_save, base_dir, label_files)
     detector.remove()
 
 def censor_archival_components(cfg, time_report, logger, dir_home, Project, Dirs):
@@ -89,12 +89,16 @@ def censor_archival_components(cfg, time_report, logger, dir_home, Project, Dirs
     path_archival_labels = os.path.join(Dirs.path_archival_components, 'labels')
     label_files = glob.glob(os.path.join(path_archival_labels, '*.txt'))
 
+    # Extract paths as strings to avoid pickling issues with custom objects
+    dir_images = Project.dir_images
+    dir_save = Dirs.censor_archival_components
+
     # Split the list of label files into chunks for each worker
     num_workers = os.cpu_count()  # Number of available CPU cores
     chunks = [label_files[i::num_workers] for i in range(num_workers)]
 
     with ProcessPoolExecutor(max_workers=num_workers) as executor:
-        futures = [executor.submit(process_files, cfg, Dirs, Project, path_archival_labels, chunk) for chunk in chunks]
+        futures = [executor.submit(process_files, cfg, dir_images, dir_save, path_archival_labels, chunk) for chunk in chunks]
         for future in futures:
             future.result()  # Wait for all futures to complete
 

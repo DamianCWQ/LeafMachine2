@@ -31,7 +31,12 @@ from zipfile import ZipFile, is_zipfile
 import cv2
 import numpy as np
 import pandas as pd
-import pkg_resources as pkg
+try:
+    from importlib.metadata import version as _version, PackageNotFoundError
+except Exception:
+    from importlib_metadata import version as _version, PackageNotFoundError  # type: ignore
+
+from packaging.version import parse as _parse_version
 import torch
 import torchvision
 import yaml

@@ -27,7 +27,13 @@ from zipfile import ZipFile
 import cv2
 import numpy as np
 import pandas as pd
-import pkg_resources as pkg
+try:
+    from importlib.metadata import version as _version, PackageNotFoundError
+except Exception:
+    from importlib_metadata import version as _version, PackageNotFoundError  # type: ignore
+
+from packaging.version import parse as _parse_version
+from packaging.requirements import Requirement
 import torch
 import torchvision
 import yaml
@@ -360,7 +366,7 @@ def check_python(minimum='3.7.0'):
 
 def check_version(current='0.0.0', minimum='0.0.0', name='version ', pinned=False, hard=False, verbose=False):
     # Check version vs. required version
-    current, minimum = (pkg.parse_version(x) for x in (current, minimum))
+    current, minimum = (_parse_version(x) for x in (current, minimum))
     result = (current == minimum) if pinned else (current >= minimum)  # bool
     s = f'{name}{minimum} required by YOLOv5, but {name}{current} is currently installed'  # string
     if hard:
@@ -378,15 +384,32 @@ def check_requirements(requirements=ROOT / 'requirements.txt', exclude=(), insta
     if isinstance(requirements, (str, Path)):  # requirements.txt file
         file = Path(requirements)
         assert file.exists(), f"{prefix} {file.resolve()} not found, check failed."
+        requirements = []
         with file.open() as f:
-            requirements = [f'{x.name}{x.specifier}' for x in pkg.parse_requirements(f) if x.name not in exclude]
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith('#'):
+                    continue
+                try:
+                    req = Requirement(line)
+                except Exception:
+                    continue
+                if req.name not in exclude:
+                    requirements.append(f'{req.name}{req.specifier}')
     else:  # list or tuple of packages
         requirements = [x for x in requirements if x not in exclude]
 
     n = 0  # number of packages updates
     for i, r in enumerate(requirements):
         try:
-            pkg.require(r)
+            # r like 'name>=1.2' or 'name'
+            req = Requirement(r)
+            try:
+                inst_ver = _version(req.name)
+                if req.specifier and not req.specifier.contains(inst_ver, prereleases=True):
+                    raise Exception()
+            except PackageNotFoundError:
+                raise Exception()
         except Exception:  # DistributionNotFound or VersionConflict if requirements not met
             s = f"{prefix} {r} not found and is required by YOLOv5"
             if install and AUTOINSTALL:  # check environment variable
