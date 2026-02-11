@@ -1,0 +1,95 @@
+# docker/Dockerfile.cpu
+# CPU-only image (works on Linux/Windows/macOS via Docker Desktop)
+FROM python:3.11-slim
+
+# Avoid interactive prompts during apt installs
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Python ergonomics
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_NO_CACHE_DIR=1
+
+# System deps (opencv, pillow, etc.). Keep lean but practical.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git \
+    bash \
+    ca-certificates \
+    ffmpeg \
+    libglib2.0-0 \
+    libsm6 \
+    libxext6 \
+    libxrender1 \
+    libgl1 \
+    && rm -rf /var/lib/apt/lists/*
+
+# ------------------------------------------------------------
+# Non-root user
+# ------------------------------------------------------------
+ARG USERNAME=lm2
+ARG USER_UID=1000
+ARG USER_GID=1000
+RUN groupadd --gid ${USER_GID} ${USERNAME} \
+ && useradd --uid ${USER_UID} --gid ${USER_GID} -m ${USERNAME}
+
+WORKDIR /app
+
+# ------------------------------------------------------------
+# Cache-friendly dependency install:
+#   Copy requirements first, install deps, then copy repo.
+# ------------------------------------------------------------
+COPY requirements.txt /app/requirements.txt
+
+# Install pip + uv
+# UV_LINK_MODE=copy avoids hardlink warnings in some Docker setups.
+ENV UV_LINK_MODE=copy
+RUN python -m pip install --no-cache-dir -U pip setuptools wheel \
+ && python -m pip install --no-cache-dir uv
+
+# Install Python deps from requirements using BuildKit cache mount
+# Do NOT rm -rf the mount target; it's a BuildKit-managed cache.
+ENV UV_CACHE_DIR=/root/.cache/uv
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv pip install --system --no-cache-dir -r /app/requirements.txt
+
+# Required explicit installs (mirrors GPU approach)
+RUN uv pip install --system \
+      "git+https://github.com/waspinator/pycococreator.git@fba8f4098f3c7aaa05fe119dc93bbe4063afdab8#egg=pycococreatortools" \
+ && uv pip install --system "pycocotools>=2.0.5" \
+ && uv pip install --system "opencv-contrib-python-headless==4.7.0.72" \
+ && uv pip install --system "vit-pytorch==0.37.1"
+
+# Torch CPU build
+RUN uv pip install --system \
+      "torch==2.3.1" "torchvision==0.18.1" "torchaudio==2.3.1" \
+      --index-url https://download.pytorch.org/whl/cpu
+
+# Now copy the rest of the repo into image
+COPY . /app
+
+# Runtime environment variables expected by LM2
+ENV LM2_MODELS_DIR=/models \
+    LM2_DATA_DIR=/data \
+    YOLO_CONFIG_DIR=/tmp/ultralytics \
+    MPLCONFIGDIR=/tmp/matplotlib \
+    HF_HOME=/tmp/hf \
+    TORCH_HOME=/tmp/torch \
+    XDG_CACHE_HOME=/tmp/.cache
+
+# Create mount points + runtime cache dirs and ensure they work with:
+#   docker compose run --user $(id -u):$(id -g) ...
+# Key: /tmp/* must be writable for arbitrary UIDs (Ultralytics writes settings.yaml)
+RUN mkdir -p /data /models /output \
+ && mkdir -p /tmp/ultralytics /tmp/matplotlib /tmp/.cache /tmp/torch /tmp/hf /tmp/torchinductor \
+ && chmod -R 777 /tmp/ultralytics /tmp/matplotlib /tmp/.cache /tmp/torch /tmp/hf /tmp/torchinductor \
+ && chown -R ${USERNAME}:${USERNAME} /app /data /models /output
+
+# Entrypoint
+COPY docker/entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+USER ${USERNAME}
+
+ENTRYPOINT ["/entrypoint.sh"]
+CMD ["python3", "test_cpu_only.py"]

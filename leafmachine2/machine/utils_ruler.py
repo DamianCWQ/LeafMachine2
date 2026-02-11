@@ -844,6 +844,13 @@ class RulerInfo:
         self.Ruler = Ruler            
         self.ruler_class = self.Ruler.ruler_class
 
+        # Ensure `summary_image` attribute always exists to avoid AttributeError
+        # Prefer a sensible default if available on the Ruler object, else None
+        try:
+            self.summary_image = copy.deepcopy(getattr(self.Ruler, 'img_copy', None))
+        except Exception:
+            self.summary_image = None
+
         self.conversion_successful=False
         self.pooled_sd = -999
         self.conversion_mean_n_vals = -999
