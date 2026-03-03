@@ -93,7 +93,7 @@ tqdm>=4.65.0
 wandb>=0.13.4
 comet-ml>=3.39.1
 sentry-sdk>=1.9.10
-visdom>=0.2.4
+# visdom>=0.2.4  # training-only visualizer; broken build on setuptools>=76, not needed for inference
 
 # -------------------------
 # Orchestration / config / tools

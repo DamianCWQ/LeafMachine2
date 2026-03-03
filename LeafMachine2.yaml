@@ -131,7 +131,7 @@ leafmachine:
     verbose: true
   project:
     GBIF_mode: all
-    accept_only_ideal_leaves: true
+    accept_only_ideal_leaves: true # Can be set to false to include leaves with some damage, but may result in more noisy data. If true, only leaves with no damage and no occlusions will be included.
     batch_size: 100
     censor_archival_components: true
     device: cuda
