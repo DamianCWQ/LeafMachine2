@@ -135,9 +135,9 @@ leafmachine:
     batch_size: 100
     censor_archival_components: true
     device: cuda
-    dir_images_local: C:\Users\User\Documents\Damian\Swinburne\small dataset
+    dir_images_local: C:\Users\damia\OneDrive\Documents\Damian\Swinburne\FYP\small dataset2
     dir_images_subset: ''
-    dir_output: C:\Users\User\Downloads\LeafMachine_Output
+    dir_output: C:\Users\damia\OneDrive\Documents\Damian\Swinburne\FYP\small dataset2\output
     hide_archival_components:
     - ruler
     - barcode
