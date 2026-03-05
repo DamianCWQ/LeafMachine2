@@ -1,61 +1,6 @@
 # LeafMachine2 Easy Installation Guide
 
-Choose one of the following installation methods:
-
----
-
-## Option 1: Docker Installation (Recommended)
-
-Docker provides the easiest setup with all dependencies pre-configured.
-
-### Prerequisites:
-- Docker Desktop installed ([download here](https://www.docker.com/products/docker-desktop))
-- For GPU support: NVIDIA GPU with drivers + NVIDIA Container Toolkit
-
-### Using Docker Compose (Easiest)
-
-**GPU Version:**
-```bash
-cd docker
-docker compose -f compose.gpu.public.yml pull
-docker compose -f compose.gpu.public.yml run lm2-gpu python test.py
-```
-
-**CPU Version:**
-```bash
-cd docker
-docker compose -f compose.cpu.public.yml pull
-docker compose -f compose.cpu.public.yml run lm2-cpu python test_cpu_only.py
-```
-
-### Using Docker CLI
-
-**GPU Version:**
-```bash
-# Pull the image
-docker pull ghcr.io/gene-weaver/leafmachine2:gpu-latest
-
-# Run with GPU support
-docker run --gpus all -v .:/app -w /app ghcr.io/gene-weaver/leafmachine2:gpu-latest python3 test.py
-```
-
-**CPU Version:**
-```bash
-# Pull the image
-docker pull ghcr.io/gene-weaver/leafmachine2:cpu-latest
-
-# Run CPU version
-docker run -v .:/app -w /app ghcr.io/gene-weaver/leafmachine2:cpu-latest python3 test_cpu_only.py
-```
-
-**Notes:**
-- Replace `test.py` or `test_cpu_only.py` with your actual script name
-- The `-v .:/app` mounts your current directory into the container
-- For Windows, use PowerShell or add `${PWD}` instead of `.` for the volume mount
-
----
-
-## Option 2: Manual Python Installation
+## Manual Python Installation
 
 For users who prefer a local Python environment.
 
