@@ -45,9 +45,12 @@ def save_data(cfg, time_report, logger, dir_home, Project, batch, n_batches, Dir
             'ruler_class_confidence','units', 'cross_validation_count','n_scanlines','n_data_points_in_avg','avg_tick_width',]
     
     if cfg['leafmachine']['data']['include_darwin_core_data_from_combined_file']:
-        specimen, temp_dict = next(iter(Project.project_data.items())) 
-        record_column_names = list(Project.project_data[specimen]['GBIF_Record'].keys())
-        column_names = seg_column_names + record_column_names
+        specimen, temp_dict = next(iter(Project.project_data.items()))
+        if 'GBIF_Record' in Project.project_data[specimen]:
+            record_column_names = list(Project.project_data[specimen]['GBIF_Record'].keys())
+            column_names = seg_column_names + record_column_names
+        else:
+            column_names = seg_column_names
     else:
         column_names = seg_column_names
 
@@ -145,7 +148,7 @@ class Data_Vault():
         self.height = self.get_key_value(analysis, 'height', 0)
         self.width = self.get_key_value(analysis, 'width', 0)
 
-        self.specimen_record = self.get_key_value(analysis, 'GBIF_Record')
+        self.specimen_record = self.get_key_value(analysis, 'GBIF_Record', {})
 
         self.archival = self.get_key_value(analysis, 'Detections_Archival_Components')
         self.plant = self.get_key_value(analysis, 'Detections_Plant_Components')
@@ -410,7 +413,7 @@ class Data_Vault():
             'efd_phase', 'efd_area', 'efd_perimeter', 'efd_plot_points',
             ]
         
-        if cfg['leafmachine']['data']['include_darwin_core_data_from_combined_file']:
+        if cfg['leafmachine']['data']['include_darwin_core_data_from_combined_file'] and self.specimen_record:
             record_column_names = list(self.specimen_record.keys())
             column_names = efd_column_names + record_column_names
         else:
@@ -616,7 +619,7 @@ class Data_Vault():
             'ruler_image_name', 'ruler_success','conversion_mean', 'predicted_conversion_factor_cm','pooled_sd','ruler_class',
             'ruler_class_confidence','units', 'cross_validation_count','n_scanlines','n_data_points_in_avg','avg_tick_width',]
 
-        if cfg['leafmachine']['data']['include_darwin_core_data_from_combined_file']:
+        if cfg['leafmachine']['data']['include_darwin_core_data_from_combined_file'] and self.specimen_record:
             record_column_names = list(self.specimen_record.keys())
             column_names = ruler_column_names + record_column_names
         else:
@@ -860,7 +863,7 @@ class Data_Vault():
             'units', 'cross_validation_count' ,'n_scanlines' ,'n_data_points_in_avg', 
             'avg_tick_width',]
 
-        if cfg['leafmachine']['data']['include_darwin_core_data_from_combined_file']:
+        if cfg['leafmachine']['data']['include_darwin_core_data_from_combined_file'] and self.specimen_record:
             record_column_names = list(self.specimen_record.keys())
             column_names = ruler_column_names + record_column_names
         else:
@@ -1028,7 +1031,7 @@ class Data_Vault():
             'ruler_class', 'ruler_class_confidence', 'ruler_location','plot_points', 
             'plot_points_1cm', 'plot_points_10cm', 'point_types','n_points','scanline_height',
             'distances_in_average','sd','conversion_factor_gmean','conversion_factor_mean','unit']
-        if cfg['leafmachine']['data']['include_darwin_core_data_from_combined_file']:
+        if cfg['leafmachine']['data']['include_darwin_core_data_from_combined_file'] and self.specimen_record:
             record_column_names = list(self.specimen_record.keys())
             column_names = ruler_column_names + record_column_names
         else:

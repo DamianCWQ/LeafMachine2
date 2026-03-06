@@ -352,6 +352,9 @@ def worker_object_detector(queue, weights, project, name, imgsz, nosave, anno_ty
         sub_source = queue.get()
         if sub_source is None:
             break  # None is the signal to stop processing
+        if not sub_source:  # skip empty chunks (fewer images than workers)
+            queue.task_done()
+            continue
         try:
             run(weights=weights,
                 source=sub_source,
@@ -559,6 +562,9 @@ def create_dictionary_from_txt_parallel(logger, cfg, dir_components, component, 
 # Single threaded for non-SQL Project
 def create_dictionary_from_txt(logger, dir_components, component, Project):
     # dict_labels = {}
+    if not os.path.isdir(dir_components):
+        logger.warning(f"Labels directory not found, skipping annotation loading: {dir_components}")
+        return Project.project_data
     for file in tqdm(os.listdir(dir_components), desc="Loading Annotations", colour='green'):
         if file.endswith(".txt"):
             file_name = str(file.split('.')[0])

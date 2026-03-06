@@ -244,8 +244,8 @@ def machine(cfg_file_path, dir_home, cfg_test, progress_report=None):
         merge_csv_files(Dirs, cfg)
         
         t_overall_s = perf_counter()
-        t_overall = f"[Total Project elapsed time] {round((t_overall_s - t_overall)/60)} minutes"
-        time_report['overall'] = t_overall
+        t_overall_str = f"[Total Project elapsed time] {round((t_overall_s - t_overall)/60)} minutes"
+        time_report['overall'] = t_overall_str
         logger.name = 'Run Complete! :)'
         for opt, val in time_report.items():
             logger.info(f"{val}")
