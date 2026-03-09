@@ -221,3 +221,7 @@ dmypy.json
 # Allow Docker packaging files to be tracked
 !docker/
 !docker/**
+
+# API stuff
+outputs/
+uploads/

@@ -139,3 +139,11 @@ Sphinx>=7.2.6
 docutils>=0.20.1
 dvclive>=3.45.0
 setuptools>=58.1.0
+
+# -------------------------
+# API / web server dependencies 
+# -------------------------
+fastapi[standard]>=0.111.0
+uvicorn[standard]>=0.29.0
+pydantic-settings>=2.2.0
+httpx>=0.27.0

@@ -1,0 +1,51 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# LeafMachine2 Execution Service — docker-compose.yml
+#
+# This compose file is for the LeafMachine SERVER ONLY.
+# The Laravel application runs on a separate host and is not defined here.
+#
+# Usage:
+#   cp api/.env.example api/.env   # then fill in your values
+#   docker compose -f api/docker-compose.yml up -d
+# ─────────────────────────────────────────────────────────────────────────────
+
+services:
+  leafmachine-api:
+    build:
+      context: ..          # repo root (so COPY . . gets the full project)
+      dockerfile: api/Dockerfile
+    image: leafmachine2-api:latest
+    restart: unless-stopped
+    env_file:
+      - .env               # api/.env — never commit real secrets
+    ports:
+      # Bind only to localhost (or internal interface) and rely on firewall /
+      # reverse-proxy to restrict external access to the Laravel server IP.
+      - "127.0.0.1:${PORT:-5000}:5000"
+    volumes:
+      # Mount persistent storage for uploads and outputs so data survives
+      # container restarts.  Adjust host paths to match your server layout.
+      - ${LM2_UPLOAD_DIR:-/srv/leafmachine2/uploads}:/srv/leafmachine2/uploads
+      - ${LM2_OUTPUT_DIR:-/srv/leafmachine2/outputs}:/srv/leafmachine2/outputs
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+  # ── Future: separate worker process ──────────────────────────────────────
+  # Uncomment and adapt when you move from BackgroundTasks to a dedicated
+  # worker process (e.g. consuming from a Redis/RabbitMQ queue):
+  #
+  # leafmachine-worker:
+  #   image: leafmachine2-api:latest
+  #   restart: unless-stopped
+  #   env_file:
+  #     - .env
+  #   command: python -m api.worker   # a separate worker module
+  #   volumes:
+  #     - ${LM2_UPLOAD_DIR:-/srv/leafmachine2/uploads}:/srv/leafmachine2/uploads
+  #     - ${LM2_OUTPUT_DIR:-/srv/leafmachine2/outputs}:/srv/leafmachine2/outputs
+  #   depends_on:
+  #     - leafmachine-api
