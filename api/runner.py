@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import sys
 from copy import deepcopy
 from pathlib import Path
@@ -164,7 +165,9 @@ def run_job(job_id: str, input_dir: str, run_name: str, config_overrides: dict) 
     # Force-set controlled paths — these can never come from config_overrides
     cfg["leafmachine"]["project"]["dir_images_local"] = input_dir
     cfg["leafmachine"]["project"]["dir_output"] = output_path
-    cfg["leafmachine"]["project"]["run_name"] = run_name
+    # Sanitize run_name: replace characters invalid in Windows directory names
+    safe_run_name = re.sub(r'[<>:"/\\|?*]', '-', run_name).strip()
+    cfg["leafmachine"]["project"]["run_name"] = safe_run_name
 
     os.makedirs(output_path, exist_ok=True)
 
