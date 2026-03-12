@@ -53,3 +53,4 @@ class FinalCallback(BaseModel):
     result_files: list[str] = []
     output_path: Optional[str] = None
     error_message: Optional[str] = None
+    results_data: Optional[list[dict]] = None

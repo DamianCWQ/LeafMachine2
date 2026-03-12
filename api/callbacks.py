@@ -53,6 +53,7 @@ def post_final(
     result_files: list[str],
     output_path: str,
     error_message: str | None = None,
+    results_data: list[dict] | None = None,
 ) -> None:
     """Push the final job outcome (completed or failed) to Laravel.
 
@@ -73,6 +74,7 @@ def post_final(
         result_files=result_files,
         output_path=output_path,
         error_message=error_message,
+        results_data=results_data,
     ).model_dump()
 
     try:

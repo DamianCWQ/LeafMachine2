@@ -40,14 +40,12 @@ uv pip install "vit-pytorch==0.37.1"
 uv pip install torch==2.3.1 torchvision==0.18.1 torchaudio==2.3.1 --index-url https://download.pytorch.org/whl/cu121
 ```
 
+### 7. Run the microservice:
+`uvicorn api.main:app --reload --port 9000` to run the microservice
+
 ---
 
 ## Troubleshooting
-
-**Docker Issues:**
-- Ensure Docker Desktop is running
-- For GPU: Verify NVIDIA Container Toolkit is installed with `docker run --rm --gpus all nvidia/cuda:12.1.1-base-ubuntu22.04 nvidia-smi`
-
 **Manual Installation Issues:**
 - Ensure Python 3.11 is installed (not 3.12+)
 - On Windows, install Microsoft Visual C++ 14.0+ for pycocotools

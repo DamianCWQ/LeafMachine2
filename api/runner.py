@@ -16,6 +16,8 @@ Responsibilities
 """
 from __future__ import annotations
 
+import csv
+import glob
 import logging
 import os
 import re
@@ -37,6 +39,33 @@ _BLOCKED_KEYS: frozenset[str] = frozenset(
         "dir_output",
         "run_name",
         "dir_home",
+    }
+)
+
+# ── Measurements CSV field definitions ────────────────────────────────────────
+# Columns to extract from *_MEASUREMENTS.csv for the results_data payload.
+_MEAS_FIELDS: tuple[str, ...] = (
+    "filename",
+    "component_name",
+    "area",
+    "perimeter",
+    "bbox_min_long_side",
+    "bbox_min_short_side",
+    "units",
+    "conversion_factor_applied",
+    "aspect_ratio",
+    "annotation_name",  # exposed as component_type
+)
+
+# Fields that should be cast to float (empty string or missing → None).
+_NUMERIC_MEAS_FIELDS: frozenset[str] = frozenset(
+    {
+        "area",
+        "perimeter",
+        "bbox_min_long_side",
+        "bbox_min_short_side",
+        "conversion_factor_applied",
+        "aspect_ratio",
     }
 )
 
@@ -113,6 +142,55 @@ def _collect_results(output_path: str) -> list[str]:
     ]
 
 
+def _parse_results_csv(output_path: str, run_name: str) -> list[dict]:
+    """Parse the merged measurements CSV and return a list of component records.
+
+    Each record contains the 10 required fields; annotation_name is renamed to
+    component_type.  Returns an empty list (with a warning) if no CSV is found.
+
+    The merged file is written by LeafMachine2 to:
+        {output_path}/{run_name}/Data/Measurements/{run_name}_MEASUREMENTS.csv
+    A recursive fallback glob is used in case the run_name sub-folder differs.
+    """
+    # Primary path — exact location written by directory_structure.py
+    primary = str(Path(output_path) / run_name / "Data" / "Measurements" / f"{run_name}_MEASUREMENTS.csv")
+    matches = glob.glob(primary)
+
+    if not matches:
+        # Fallback: search anywhere under output_path for a merged measurements file
+        matches = glob.glob(str(Path(output_path) / "**" / "*_MEASUREMENTS.csv"), recursive=True)
+
+    if not matches:
+        logger.warning("No _MEASUREMENTS.csv found under %s — results_data will be empty", output_path)
+        return []
+
+    csv_path = matches[0]
+    records: list[dict] = []
+
+    try:
+        with open(csv_path, newline="", encoding="utf-8") as fh:
+            reader = csv.DictReader(fh)
+            for row in reader:
+                record: dict = {}
+                for field in _MEAS_FIELDS:
+                    raw = row.get(field, "") or ""
+                    if field in _NUMERIC_MEAS_FIELDS:
+                        try:
+                            record[field] = float(raw) if raw.strip() else None
+                        except ValueError:
+                            record[field] = None
+                    elif field == "annotation_name":
+                        record["component_type"] = raw.strip() or None
+                    else:
+                        record[field] = raw.strip() or None
+                records.append(record)
+    except Exception as exc:
+        logger.error("Failed to parse measurements CSV %s: %s", csv_path, exc)
+
+    logger.info("Parsed %d component record(s) from %s", len(records), csv_path)
+    return records
+
+
 def run_job(job_id: str, input_dir: str, run_name: str, config_overrides: dict) -> None:
     """Execute the LeafMachine2 pipeline for a single job.
 
@@ -184,8 +262,9 @@ def run_job(job_id: str, input_dir: str, run_name: str, config_overrides: dict) 
 
     # ── Report success ───────────────────────────────────────────────────────
     result_files = _collect_results(output_path)
+    results_data = _parse_results_csv(output_path, safe_run_name)
     logger.info("Job %s completed. %d result files.", job_id, len(result_files))
-    callbacks.post_final(job_id, JobStatus.completed, result_files, output_path)
+    callbacks.post_final(job_id, JobStatus.completed, result_files, output_path, results_data=results_data)
 
 
 # ── Public validate helper (called by routers before enqueueing) ─────────────
