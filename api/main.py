@@ -2,12 +2,7 @@
 LeafMachine2 execution microservice entry point.
 
 Start with:
-    uvicorn api.main:app --host 0.0.0.0 --port 5000
-
-Or for development (auto-reload):
-    uvicorn api.main:app --reload --port 5000
-
-The OpenAPI documentation is available at /docs (Swagger UI) and /redoc.
+    uvicorn api.main:app --host 0.0.0.0 --port 9000
 """
 import logging
 import uvicorn

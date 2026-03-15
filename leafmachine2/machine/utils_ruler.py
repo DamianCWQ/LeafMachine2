@@ -22,6 +22,7 @@ from time import perf_counter
 from binarize_image_ML import DocEnTR
 
 from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures.process import BrokenProcessPool
 import multiprocessing as mp
 
 currentdir = os.path.dirname(os.path.dirname(inspect.getfile(inspect.currentframe())))
@@ -629,23 +630,59 @@ def convert_rulers(cfg, time_report, logger, dir_home, Project, batch, Dirs, num
     results_received = 0
     errors = 0
 
-    with ProcessPoolExecutor(
-        max_workers=num_workers,
-        mp_context=ctx,
-        initializer=_init_wrapper_top_level,
-        initargs=(cfg, dir_home, Dirs, dir_images, show_all_logs, use_CF_predictor, use_cuda, slot_counter),
-    ) as ex:
-        futures = [ex.submit(_process_one_filename_task, p) for p in payloads]
+    pool_broken = False
+    try:
+        with ProcessPoolExecutor(
+            max_workers=num_workers,
+            mp_context=ctx,
+            initializer=_init_wrapper_top_level,
+            initargs=(cfg, dir_home, Dirs, dir_images, show_all_logs, use_CF_predictor, use_cuda, slot_counter),
+        ) as ex:
+            futures = [ex.submit(_process_one_filename_task, p) for p in payloads]
 
-        for fut in as_completed(futures):
-            msg = fut.result()
-            filename = msg["filename"]
+            for fut in as_completed(futures):
+                msg = fut.result()
+                filename = msg["filename"]
+                Project.project_data_list[batch][filename]["Ruler_Info"] = msg.get("Ruler_Info", [])
+                Project.project_data_list[batch][filename]["Ruler_Data"] = msg.get("Ruler_Data", [])
+
+                if msg.get("error"):
+                    errors += 1
+                    logger.error(f"[rulers pool] {filename}: {msg['error']}")
+
+                results_received += 1
+    except BrokenProcessPool as exc:
+        pool_broken = True
+        logger.warning(
+            f"[rulers pool] Worker pool terminated unexpectedly ({exc}). "
+            "Falling back to in-process ruler conversion for remaining files."
+        )
+
+    if pool_broken:
+        if not _G["initialized"]:
+            _pool_initializer(
+                worker_slot=0,
+                use_cuda=use_cuda,
+                cfg=cfg,
+                dir_home=dir_home,
+                Dirs=Dirs,
+                dir_images=dir_images,
+                show_all_logs=show_all_logs,
+                use_CF_predictor=use_CF_predictor,
+            )
+
+        for payload in payloads:
+            filename = payload["filename"]
+            if Project.project_data_list[batch][filename].get("Ruler_Info"):
+                continue
+
+            msg = _process_one_filename_task(payload)
             Project.project_data_list[batch][filename]["Ruler_Info"] = msg.get("Ruler_Info", [])
             Project.project_data_list[batch][filename]["Ruler_Data"] = msg.get("Ruler_Data", [])
 
             if msg.get("error"):
                 errors += 1
-                logger.error(f"[rulers pool] {filename}: {msg['error']}")
+                logger.error(f"[rulers fallback] {filename}: {msg['error']}")
 
             results_received += 1
 
