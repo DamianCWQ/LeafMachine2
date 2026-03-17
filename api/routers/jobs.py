@@ -1,8 +1,6 @@
 """
 Job submission endpoints.
 
-All routes require X-API-Key authentication (see api/auth.py).
-
 Two submission modes
 ---------------------
 POST /api/v1/jobs/upload
@@ -30,7 +28,6 @@ from pathlib import Path
 from fastapi import (
     APIRouter,
     BackgroundTasks,
-    Depends,
     File,
     Form,
     HTTPException,
@@ -39,7 +36,6 @@ from fastapi import (
 )
 from fastapi.responses import FileResponse
 
-from api.auth import verify_api_key
 from api.config import settings
 from api.runner import run_job, validate_config_overrides
 from api.schemas import JobAccepted, JobRequest
@@ -49,7 +45,6 @@ logger = logging.getLogger("lm2.routers.jobs")
 router = APIRouter(
     prefix="/api/v1/jobs",
     tags=["jobs"],
-    dependencies=[Depends(verify_api_key)],
 )
 
 

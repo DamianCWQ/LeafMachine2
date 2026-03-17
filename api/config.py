@@ -14,8 +14,9 @@ class Settings(BaseSettings):
     )
 
     # ── Service auth ──────────────────────────────────────────────────────────
-    # Secret shared with Laravel. Set in .env — never commit the real value.
-    LM2_API_KEY: str
+    # Authentication is disabled for this service. This value is optional and
+    # retained only for backwards-compatible environment files.
+    LM2_API_KEY: str = ""
 
     # ── LeafMachine2 paths ───────────────────────────────────────────────────
     # Root of the LeafMachine2 repository on this server.
@@ -40,7 +41,7 @@ class Settings(BaseSettings):
     LARAVEL_CALLBACK_URL: str = ""
 
     # Bearer token that the Python service uses when posting callbacks to
-    # Laravel.  Laravel verifies this before updating MySQL.
+    # Laravel. Unused when callback auth is disabled.
     LARAVEL_CALLBACK_TOKEN: str = ""
 
 
