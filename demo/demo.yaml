@@ -190,6 +190,7 @@ leafmachine:
         save_masks_color: True
         save_full_image_masks_color: True
         save_rgb_cropped_images: True
+        save_individual_leaves_white_background: False
 
         find_minimum_bounding_box: True
 

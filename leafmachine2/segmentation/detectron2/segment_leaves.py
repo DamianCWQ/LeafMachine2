@@ -266,20 +266,22 @@ def segment_images(logger, dir_home, dict_objects, leaf_type, dict_name_seg, dic
     bg_color = cfg['leafmachine']['leaf_segmentation']['overlay_background_color']
     keep_best = cfg['leafmachine']['leaf_segmentation']['keep_only_best_one_leaf_one_petiole']
     save_overlay_pdf = cfg['leafmachine']['leaf_segmentation']['save_segmentation_overlay_images_to_pdf']
-    save_each_segmentation_overlay_image = cfg['leafmachine']['leaf_segmentation']['save_segmentation_overlay_images_to_pdf']
+    save_each_segmentation_overlay_image = cfg['leafmachine']['leaf_segmentation']['save_each_segmentation_overlay_image']
     save_individual_overlay_images = cfg['leafmachine']['leaf_segmentation']['save_individual_overlay_images']
     save_oriented_images = cfg['leafmachine']['leaf_segmentation']['save_oriented_images']
 
     save_ind_masks_color = cfg['leafmachine']['leaf_segmentation']['save_masks_color']
+    save_individual_leaves_white_background = cfg['leafmachine']['leaf_segmentation'].get('save_individual_leaves_white_background', False)
     # save_ind_masks_index = cfg['leafmachine']['leaf_segmentation']['save_masks_index']
     save_full_image_masks_color = cfg['leafmachine']['leaf_segmentation']['save_full_image_masks_color']
     # save_full_image_masks_index = cfg['leafmachine']['leaf_segmentation']['save_full_image_masks_index']
     use_efds_for_masks = cfg['leafmachine']['leaf_segmentation']['use_efds_for_png_masks']
     save_rgb_cropped_images = cfg['leafmachine']['leaf_segmentation']['save_rgb_cropped_images']
 
-    filenames = []
-    full_images = []
-    full_masks = []
+    pdf = None
+    if save_overlay_pdf:
+        pdf_name = os.path.join(Dirs.segmentation_overlay_pdfs, ''.join([dict_name_seg, '_',str(batch+1), 'of',str(n_batches),'.pdf']))
+        pdf = PdfPages(pdf_name)
 
     seg_overlay_name = '_'.join([dict_name_seg,'Overlay'])
     seg_overlay = {}
@@ -370,22 +372,19 @@ def segment_images(logger, dir_home, dict_objects, leaf_type, dict_name_seg, dic
 
                         save_individual_segmentations(save_individual_overlay_images, dict_name_seg, seg_name, cropped_overlay, Dirs)
 
-                        full_mask = save_masks_color(keypoint_data, save_oriented_images, save_ind_masks_color, save_full_image_masks_color, 
-                                                     use_efds_for_masks, full_mask, overlay_data, cropped_overlay_size, full_size, seg_name, 
-                                                     seg_name_short, leaf_type, Dirs, CF)
+                        full_mask = save_masks_color(keypoint_data, save_oriented_images, save_ind_masks_color, save_full_image_masks_color,
+                                                     save_individual_leaves_white_background, use_efds_for_masks, full_mask, overlay_data,
+                                                     cropped_overlay_size, full_size, seg_name, seg_name_short, img_cropped,
+                                                     leaf_type, Dirs, CF)
 
         save_full_masks(save_full_image_masks_color, full_mask, filename, leaf_type, Dirs)
         save_full_overlay_images(save_each_segmentation_overlay_image, full_image, filename, leaf_type, Dirs)
 
-        filenames.append(filename)
-        
         if save_overlay_pdf:
-            full_images.append(full_image)
+            save_full_image_segmentation_page(pdf, full_image, filename, cfg, lock)
 
-        if save_full_image_masks_color:
-            full_masks.append(full_mask)
-        
-    save_full_image_segmentations(save_overlay_pdf, dict_name_seg, full_images, filenames, Dirs, cfg, batch, n_batches, lock)#, start, end)
+    if pdf is not None:
+        pdf.close()
     return dict_objects, None #seg_overlay
 
 def save_rgb_cropped(save_rgb_cropped_images, seg_name, img_cropped, leaf_type, Dirs):
@@ -394,6 +393,65 @@ def save_rgb_cropped(save_rgb_cropped_images, seg_name, img_cropped, leaf_type, 
             cv2.imwrite(os.path.join(Dirs.whole_leaves, '.'.join([seg_name, 'jpg'])), img_cropped)
         elif leaf_type == 1:
             cv2.imwrite(os.path.join(Dirs.partial_leaves, '.'.join([seg_name, 'jpg'])), img_cropped)
+
+
+def save_individual_leaf_white_background(use_polys, overlay_color, img_cropped, seg_name, leaf_type, Dirs):
+    """Save a single-leaf RGB PNG with a pure white background and no alpha channel."""
+    if img_cropped is None or not isinstance(img_cropped, np.ndarray) or img_cropped.ndim != 3:
+        return
+    if len(use_polys) == 0:
+        return
+
+    h, w = img_cropped.shape[:2]
+    if h == 0 or w == 0:
+        return
+
+    if leaf_type == 0:
+        dir_out = Dirs.individual_leaves_white_background_whole
+    elif leaf_type == 1:
+        dir_out = Dirs.individual_leaves_white_background_partial
+    else:
+        return
+
+    include_polys = []
+    hole_polys = []
+    for i, poly in enumerate(use_polys):
+        if i >= len(overlay_color):
+            continue
+        if not poly or len(poly) < 3:
+            continue
+
+        this_color = overlay_color[i]
+        cls, _ = next(iter(this_color.items()))
+        cls = str(cls).lower()
+
+        # Preserve existing class semantics by including leaf/petiole tissue and excluding holes.
+        if 'hole' in cls:
+            hole_polys.append(poly)
+        elif ('leaf' in cls) or ('petiole' in cls):
+            include_polys.append(poly)
+
+    if len(include_polys) == 0:
+        return
+
+    mask_img = Image.new('L', (w, h), color=0)
+    mask_draw = ImageDraw.Draw(mask_img)
+
+    for poly in include_polys:
+        mask_draw.polygon(poly, fill=255)
+
+    for poly in hole_polys:
+        mask_draw.polygon(poly, fill=0)
+
+    fg_mask = np.asarray(mask_img, dtype=np.uint8)
+    if not np.any(fg_mask):
+        return
+
+    src = img_cropped[:, :, :3]
+    out_img = np.full_like(src, 255)
+    out_img[fg_mask > 0] = src[fg_mask > 0]
+
+    cv2.imwrite(os.path.join(dir_out, '.'.join([seg_name, 'png'])), out_img)
 
 ##### For mask saving
 def rotate_mask_using_keypoint_data(dir_out, seg_name, save_oriented_images, keypoint_data, img):
@@ -779,8 +837,9 @@ def save_raw_contour_txt(dir_raw_txt, raw_contour, seg_name, full_size, CF, angl
             file.write(f"{x},{y}\n")
 #######
 
-def save_masks_color(keypoint_data, save_oriented_images, save_individual_masks_color, save_full_image_masks_color, 
-                     use_efds_for_masks, full_mask, overlay_data, cropped_overlay_size, full_size, seg_name, seg_name_short, 
+def save_masks_color(keypoint_data, save_oriented_images, save_individual_masks_color, save_full_image_masks_color,
+                     save_individual_leaves_white_background, use_efds_for_masks, full_mask, overlay_data,
+                     cropped_overlay_size, full_size, seg_name, seg_name_short, img_cropped,
                      leaf_type, Dirs, CF):
     if len(overlay_data) > 0:
         # unpack
@@ -826,6 +885,9 @@ def save_masks_color(keypoint_data, save_oriented_images, save_individual_masks_
             if leaf_type == 0:
                 img.save(os.path.join(Dirs.segmentation_masks_color_whole_leaves, '.'.join([seg_name, 'png'])))
 
+                if save_individual_leaves_white_background:
+                    save_individual_leaf_white_background(use_polys, overlay_color, img_cropped, seg_name, leaf_type, Dirs)
+
                 # Handle rotation 
                 if keypoint_data:
                     oriented_mask, angle = rotate_mask_using_keypoint_data(Dirs.dir_oriented_masks, seg_name, save_oriented_images, keypoint_data, img)
@@ -842,6 +904,9 @@ def save_masks_color(keypoint_data, save_oriented_images, save_individual_masks_
 
             elif leaf_type == 1:
                 img.save(os.path.join(Dirs.segmentation_masks_color_partial_leaves, '.'.join([seg_name, 'png'])))
+
+                if save_individual_leaves_white_background:
+                    save_individual_leaf_white_background(use_polys, overlay_color, img_cropped, seg_name, leaf_type, Dirs)
 
                 # Handle rotation 
                 if keypoint_data:
@@ -925,9 +990,9 @@ def create_insert(full_image, overlay_data, seg_name_short, cfg):
         # fill_color = overlay_color[0][0]
         # outline_color =  overlay_color[0][1]
 
-        # initialize
-        full_image = np.asarray(full_image)
-        full_image = Image.fromarray(full_image)
+        # Keep a single PIL-backed image to avoid repeated large array copies.
+        if isinstance(full_image, np.ndarray):
+            full_image = Image.fromarray(full_image)
         draw = ImageDraw.Draw(full_image, "RGBA")
 
         if overlay_poly != []:
@@ -977,7 +1042,7 @@ def save_individual_segmentations(save_individual_overlay_images, dict_name_seg,
         elif dict_name_seg == "Segmentation_Partial_Leaf":
             cv2.imwrite(os.path.join(Dirs.segmentation_partial_leaves, '.'.join([seg_name, 'jpg'])), cropped_overlay)
 
-def save_full_image_segmentations(save_overlay_pdf, dict_name_seg, full_images, filenames, Dirs, cfg, batch, n_batches, lock):#, start, end):
+def save_full_image_segmentation_page(pdf, img, filename, cfg, lock):
     color_bg = cfg['leafmachine']['leaf_segmentation']['overlay_background_color']
     overlay_dpi = cfg['leafmachine']['leaf_segmentation']['overlay_dpi']
 
@@ -986,35 +1051,29 @@ def save_full_image_segmentations(save_overlay_pdf, dict_name_seg, full_images, 
     else:
         color_text = 'black'
 
-    '''if save_overlay_pdf:
-        pdf_name = os.path.join(Dirs.segmentation_overlay_pdfs, ''.join([dict_name_seg, '_',str(batch+1), 'of',str(n_batches),'.pdf']))
-        with PdfPages(pdf_name) as pdf:
-            for idx, img in enumerate(full_images):
-                # Create a new figure
-                fig = plt.figure()'''
-    if save_overlay_pdf:
-        pdf_name = os.path.join(Dirs.segmentation_overlay_pdfs, ''.join([dict_name_seg, '_',str(batch+1), 'of',str(n_batches),'.pdf']))
-        with PdfPages(pdf_name) as pdf:
-            for idx, img in enumerate(full_images):
-                # Acquire the lock before accessing the list
-                with lock:
-                    # Create a new figure
-                    try:
-                        fig = plt.figure()
-                        fig.set_facecolor(color_bg)
-                        plt.tight_layout(pad=0)
-                        # plt.subplots_adjust(left=1, right=1, bottom=1, top=1)
-                        # Add the image to the figure
-                        plt.imshow(img)
-                        # plt.annotate(xy=(0, 0), xycoords='axes fraction', fontsize=6,
-                        #             xytext=(1, 1), textcoords='offset points',
-                        #             ha='left', va='bottom')
-                        plt.suptitle(filenames[idx], fontsize=10, y=0.95, color=color_text)
-                        # Save the current figure to the PDF
-                        pdf.savefig(fig, dpi=overlay_dpi)
-                        plt.close()
-                    except:
-                        pass
+    # Write each page immediately to keep memory bounded for large batches.
+    with lock:
+        try:
+            fig = plt.figure()
+            fig.set_facecolor(color_bg)
+            plt.tight_layout(pad=0)
+            plt.imshow(img)
+            plt.suptitle(filename, fontsize=10, y=0.95, color=color_text)
+            pdf.savefig(fig, dpi=overlay_dpi)
+            plt.close()
+        except:
+            pass
+
+
+def save_full_image_segmentations(save_overlay_pdf, dict_name_seg, full_images, filenames, Dirs, cfg, batch, n_batches, lock):#, start, end):
+    # Backward-compatible wrapper for legacy call sites.
+    if not save_overlay_pdf:
+        return
+
+    pdf_name = os.path.join(Dirs.segmentation_overlay_pdfs, ''.join([dict_name_seg, '_',str(batch+1), 'of',str(n_batches),'.pdf']))
+    with PdfPages(pdf_name) as pdf:
+        for idx, img in enumerate(full_images):
+            save_full_image_segmentation_page(pdf, img, filenames[idx], cfg, lock)
 
 
 

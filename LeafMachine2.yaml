@@ -86,7 +86,8 @@ leafmachine:
     save_oriented_images: true
     save_oriented_mask: true
     save_rgb_cropped_images: true
-    save_segmentation_overlay_images_to_pdf: true
+    save_individual_leaves_white_background: true
+    save_segmentation_overlay_images_to_pdf: false
     save_simple_txt: true
     segment_partial_leaves: false
     segment_whole_leaves: true
@@ -132,12 +133,12 @@ leafmachine:
   project:
     GBIF_mode: all
     accept_only_ideal_leaves: true # Can be set to false to include leaves with some damage, but may result in more noisy data. If true, only leaves with no damage and no occlusions will be included.
-    batch_size: 100
+    batch_size: 50
     censor_archival_components: true
     device: cuda
-    dir_images_local: C:\Users\damia\OneDrive\Documents\Damian\Swinburne\FYP\small dataset2
+    dir_images_local: C:\Users\damia\OneDrive\Documents\Damian\Swinburne\FYP\uni_mel_test_set
     dir_images_subset: ''
-    dir_output: C:\Users\damia\OneDrive\Documents\Damian\Swinburne\FYP\small dataset2\output
+    dir_output: C:\Users\damia\OneDrive\Documents\Damian\Swinburne\FYP\uni_mel_test_set\output
     hide_archival_components:
     - ruler
     - barcode
@@ -150,9 +151,9 @@ leafmachine:
     minimum_total_reproductive_counts: 0
     n_images_per_species: 10
     num_gpus: 1
-    num_workers: 2
-    num_workers_ruler: 2
-    num_workers_seg: 2
+    num_workers: 1
+    num_workers_ruler: 1
+    num_workers_seg: 1
     overlay_background_color: black
     overlay_dpi: 300
     path_combined_csv_local: null

@@ -86,6 +86,7 @@ leafmachine:
     save_oriented_images: true
     save_oriented_mask: true
     save_rgb_cropped_images: true
+    save_individual_leaves_white_background: false
     save_segmentation_overlay_images_to_pdf: false
     save_simple_txt: true
     segment_partial_leaves: false

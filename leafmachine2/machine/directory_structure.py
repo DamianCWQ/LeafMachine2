@@ -32,6 +32,9 @@ class Dir_Structure():
     segmentation_masks_color_whole_leaves: str = ''
     segmentation_masks_color_partial_leaves: str = ''
 
+    individual_leaves_white_background_whole: str = ''
+    individual_leaves_white_background_partial: str = ''
+
     segmentation_overlay_whole_leaves: str = ''
     segmentation_overlay_partial_leaves: str = ''
 
@@ -145,6 +148,20 @@ class Dir_Structure():
         if cfg['leafmachine']['leaf_segmentation']['save_masks_color']:
             validate_dir(self.segmentation_masks_color_whole_leaves)
             validate_dir(self.segmentation_masks_color_partial_leaves)
+
+        self.individual_leaves_white_background_whole = os.path.join(
+            self.dir_project,
+            'Plant_Components',
+            'Individual_Leaves_White_Background_Whole',
+        )
+        self.individual_leaves_white_background_partial = os.path.join(
+            self.dir_project,
+            'Plant_Components',
+            'Individual_Leaves_White_Background_Partial',
+        )
+        if cfg['leafmachine']['leaf_segmentation'].get('save_individual_leaves_white_background', False):
+            validate_dir(self.individual_leaves_white_background_whole)
+            validate_dir(self.individual_leaves_white_background_partial)
 
         self.segmentation_overlay_whole_leaves = os.path.join(self.dir_project,'Plant_Components','Segmentation_Overlay_Whole_Leaves')
         self.segmentation_overlay_partial_leaves = os.path.join(self.dir_project,'Plant_Components','Segmentation_Overlay_Partial_Leaves')

@@ -660,6 +660,8 @@ The LM2 leaf segmentation tool will try to segment all leaves that it sees, but 
 
 :star: To save the RGB image, set `save_rgb_cropped_images: True`
 
+:star: To save a white-background RGB PNG for each segmented leaf crop, set `save_individual_leaves_white_background: True`. This export keeps the same per-leaf crop size and pixel geometry, includes the same leaf/petiole foreground classes used by current segmentation logic, renders holes as white, and writes files to `Plant_Components/Individual_Leaves_White_Background_Whole` and `Plant_Components/Individual_Leaves_White_Background_Partial`.
+
 :star: To measure length and width of leaves set `find_minimum_bounding_box: True`
 
 :star: To calcualte EFDs set `calculate_elliptic_fourier_descriptors: True` and define the desired order with `elliptic_fourier_descriptor_order: null`, the default is 40, which maintains detail.
@@ -684,6 +686,7 @@ leafmachine:
         save_masks_color: True
         save_full_image_masks_color: True
         save_rgb_cropped_images: True
+        save_individual_leaves_white_background: False
 
         find_minimum_bounding_box: True
 
