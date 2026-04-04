@@ -157,6 +157,7 @@ class Data_Vault():
 
         self.seg_whole_leaf = self.get_key_value(analysis, 'Segmentation_Whole_Leaf')
         self.seg_partial_leaf = self.get_key_value(analysis, 'Segmentation_Partial_Leaf')
+        self.seg_plant_components = self.get_key_value(analysis, 'Segmentation_Plant_Components')
 
         self.landmarks_whole_leaf = self.get_key_value(analysis, 'Landmarks_Whole_Leaves')
         self.landmarks_partial_leaf = []
@@ -182,7 +183,15 @@ class Data_Vault():
         df_ruler_use = df_ruler_use.to_dict()
 
         self.gather_EFD_data(cfg, logger, Dirs, self.seg_whole_leaf, self.seg_partial_leaf, df_ruler_use)
-        self.gather_seg_data(cfg, logger, Dirs, self.seg_whole_leaf, self.seg_partial_leaf, df_ruler_use)
+        self.gather_seg_data(
+            cfg,
+            logger,
+            Dirs,
+            self.seg_whole_leaf,
+            self.seg_partial_leaf,
+            self.seg_plant_components,
+            df_ruler_use,
+        )
         self.gather_landmark_data(cfg, logger, Dirs, self.landmarks_whole_leaf, self.landmarks_partial_leaf, df_ruler_use)
 
     def get_key_value(self, dictionary, key, default_value=[]):
@@ -603,8 +612,8 @@ class Data_Vault():
                 input_dict[key] = [None]
         return input_dict
 
-    def gather_seg_data(self, cfg, logger, Dirs, seg_whole_leaf, seg_partial_leaf, df_ruler_use):
-        seg_data_list = [seg_whole_leaf, seg_partial_leaf]
+    def gather_seg_data(self, cfg, logger, Dirs, seg_whole_leaf, seg_partial_leaf, seg_plant_components, df_ruler_use):
+        seg_data_list = [seg_whole_leaf, seg_partial_leaf, seg_plant_components]
 
         df_ruler_use = self.ensure_list_values_preruler(df_ruler_use)
 
@@ -633,7 +642,7 @@ class Data_Vault():
 
         df_seg = pd.DataFrame(columns= column_names)
         self.seg_dict_list = []
-        if (seg_data_list[0] == []) and (seg_data_list[1] == []): # No leaf segmentaitons
+        if all(seg_group == [] for seg_group in seg_data_list): # No segmentations
             self.df_seg = df_seg
         else:
             for leaf_type_data in seg_data_list:
@@ -735,7 +744,14 @@ class Data_Vault():
                             # print(annotation_name)
                             logger.debug(f'[Annotation] {annotation_name}')
 
-                            if not cfg['leafmachine']['leaf_segmentation']['calculate_elliptic_fourier_descriptors']:
+                            has_efds = (
+                                cfg['leafmachine']['leaf_segmentation']['calculate_elliptic_fourier_descriptors']
+                                and ('efds' in annotation_dict)
+                                and annotation_dict['efds']
+                                and ('coeffs_normalized' in annotation_dict['efds'])
+                            )
+
+                            if not has_efds:
                                 val_efd_order = ['NA']
                                 val_efd_coeffs_features = ['NA']
                                 val_efd_a0 = ['NA']
@@ -743,8 +759,8 @@ class Data_Vault():
                                 val_efd_scale = ['NA']
                                 val_efd_angle = ['NA']
                                 val_efd_phase = ['NA']
-                                val_efd_area = ['NA']
-                                val_efd_perimeter = ['NA']
+                                val_efd_area = [0.0]
+                                val_efd_perimeter = [0.0]
                                 val_efd_plot_points = ['NA']
                             else:
                                 val_efd_order = [int(annotation_dict['efds']['coeffs_normalized'].shape[0])]

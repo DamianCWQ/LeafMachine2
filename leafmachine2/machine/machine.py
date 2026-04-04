@@ -13,6 +13,7 @@ sys.path.append(parentdir)
 sys.path.append(currentdir)
 from leafmachine2.component_detector.component_detector import detect_plant_components, detect_archival_components, detect_landmarks, detect_armature_components, detect_armature
 from leafmachine2.segmentation.detectron2.segment_leaves import segment_leaves
+from leafmachine2.segmentation.sam2.segment_components import segment_plant_components
 # from import  # ruler classifier?
 # from import  # landmarks
 from leafmachine2.machine.general_utils import check_for_subdirs, get_datetime, load_config_file, load_config_file_testing, report_config, split_into_batches, save_config_file, subset_dir_images, crop_detections_from_images, crop_detections_from_images_SpecimenCrop
@@ -165,6 +166,20 @@ def machine(cfg_file_path, dir_home, cfg_test, progress_report=None):
 
             t_batch_start = perf_counter()
             print_main_info(f'Batch {batch+1} of {n_batches}')
+
+            if cfg['leafmachine'].get('plant_component_segmentation', {}).get('enable', False):
+                if progress_report:
+                    progress_report.update_batch_part("Segmenting Plant Components")
+                Project, time_report = segment_plant_components(
+                    cfg,
+                    time_report,
+                    logger,
+                    dir_home,
+                    Project,
+                    batch,
+                    n_batches,
+                    Dirs,
+                )
 
             if cfg['leafmachine']['do']['run_leaf_processing']:
                 # Process Rulers

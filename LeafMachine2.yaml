@@ -93,6 +93,31 @@ leafmachine:
     segment_whole_leaves: true
     segmentation_model: Group3_Dataset_100000_Iter_1176PTS_512Batch_smooth_l1_LR00025_BGR
     use_efds_for_png_masks: false
+  plant_component_segmentation:
+    enable: true
+    sam2_model_config: 'sam2\sam2_configs\sam2_hiera_l.yaml'
+    sam2_checkpoint: 'weights\sam2\sam2_hiera_large.pt'
+    plantsam_checkpoint: 'weights\plantsam\BBS2_1024_2_epoch5.torch'
+    segment_classes:
+    - 0
+    - 1
+    - 2
+    - 3
+    - 4
+    - 5
+    - 6
+    - 7
+    - 8
+    - 9
+    - 10
+    minimum_detection_confidence: 0.0
+    minimum_bbox_size_px: 12
+    save_mask_png: true
+    save_masked_rgb: true
+    save_polygon_json: true
+    save_overlay_images: true
+    multimask_output: false
+    device: cuda
   logging:
     log_level: null
   modules:
@@ -136,9 +161,9 @@ leafmachine:
     batch_size: 50
     censor_archival_components: true
     device: cuda
-    dir_images_local: C:\Users\damia\OneDrive\Documents\Damian\Swinburne\FYP\uni_mel_test_set
+    dir_images_local: C:\Users\damia\OneDrive\Documents\Damian\Swinburne\FYP\small dataset2
     dir_images_subset: ''
-    dir_output: C:\Users\damia\OneDrive\Documents\Damian\Swinburne\FYP\uni_mel_test_set\output
+    dir_output: C:\Users\damia\OneDrive\Documents\Damian\Swinburne\FYP\small dataset2\output_sam
     hide_archival_components:
     - ruler
     - barcode

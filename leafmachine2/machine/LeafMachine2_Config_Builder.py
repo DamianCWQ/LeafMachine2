@@ -248,6 +248,22 @@ def build_LM2_config():
         'detector_version': 'uniform_spaced_oriented_traces_mid15_pet5_clean_640_flipidx_pt2'
     }
 
+    plant_component_segmentation_section = {
+        'enable': False,
+        'sam2_model_config': '',
+        'sam2_checkpoint': '',
+        'plantsam_checkpoint': '',
+        'segment_classes': list(range(11)),
+        'minimum_detection_confidence': 0.0,
+        'minimum_bbox_size_px': 12,
+        'save_mask_png': True,
+        'save_masked_rgb': True,
+        'save_polygon_json': True,
+        'save_overlay_images': True,
+        'multimask_output': False,
+        'device': 'cuda',
+    }
+
     # Add the sections to the 'leafmachine' key
     config_data['leafmachine']['do'] = do_section
     config_data['leafmachine']['print'] = print_section
@@ -264,6 +280,7 @@ def build_LM2_config():
     config_data['leafmachine']['landmark_detector_armature'] = landmark_detector_armature_section
     config_data['leafmachine']['ruler_detection'] = ruler_detection_section
     config_data['leafmachine']['leaf_segmentation'] = leaf_segmentation_section
+    config_data['leafmachine']['plant_component_segmentation'] = plant_component_segmentation_section
 
     return config_data, dir_home
 

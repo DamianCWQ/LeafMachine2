@@ -38,6 +38,12 @@ class Dir_Structure():
     segmentation_overlay_whole_leaves: str = ''
     segmentation_overlay_partial_leaves: str = ''
 
+    segmentation_plant_components: str = ''
+    segmentation_plant_components_masks: str = ''
+    segmentation_plant_components_masked_rgb: str = ''
+    segmentation_plant_components_overlays: str = ''
+    segmentation_plant_components_polygons: str = ''
+
     segmentation_masks_full_image_color_whole_leaves: str = ''
     segmentation_masks_full_image_color_partial_leaves: str = ''
 
@@ -168,6 +174,23 @@ class Dir_Structure():
         if cfg['leafmachine']['leaf_segmentation']['save_each_segmentation_overlay_image']:
             validate_dir(self.segmentation_overlay_whole_leaves)
             validate_dir(self.segmentation_overlay_partial_leaves)
+
+        component_seg_cfg = cfg['leafmachine'].get('plant_component_segmentation', {})
+        self.segmentation_plant_components = os.path.join(self.dir_project, 'Plant_Components', 'Segmentation_Plant_Components')
+        self.segmentation_plant_components_masks = os.path.join(self.segmentation_plant_components, 'Masks')
+        self.segmentation_plant_components_masked_rgb = os.path.join(self.segmentation_plant_components, 'Masked_RGB')
+        self.segmentation_plant_components_overlays = os.path.join(self.segmentation_plant_components, 'Overlays')
+        self.segmentation_plant_components_polygons = os.path.join(self.segmentation_plant_components, 'Polygons')
+        if component_seg_cfg.get('enable', False):
+            validate_dir(self.segmentation_plant_components)
+            if component_seg_cfg.get('save_mask_png', True):
+                validate_dir(self.segmentation_plant_components_masks)
+            if component_seg_cfg.get('save_masked_rgb', True):
+                validate_dir(self.segmentation_plant_components_masked_rgb)
+            if component_seg_cfg.get('save_overlay_images', True):
+                validate_dir(self.segmentation_plant_components_overlays)
+            if component_seg_cfg.get('save_polygon_json', True):
+                validate_dir(self.segmentation_plant_components_polygons)
 
         ### Full Image Masks
         self.segmentation_masks_full_image_color_whole_leaves = os.path.join(self.dir_project,'Plant_Components','Segmentation_Masks_Full_Image_Color_Whole_Leaves')
