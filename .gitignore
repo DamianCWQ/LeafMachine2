@@ -225,3 +225,5 @@ dmypy.json
 # API stuff
 outputs/
 uploads/
+sam2/
+weights/plantsam/BBS2_1024_2_epoch5.torch
