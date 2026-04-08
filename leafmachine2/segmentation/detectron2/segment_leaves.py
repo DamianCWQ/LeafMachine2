@@ -31,6 +31,71 @@ from leafmachine2.keypoint_detector.ultralytics.models.yolo.pose.predict_direct 
 from leafmachine2.component_detector.component_detector import unpack_class_from_components#, crop_images_to_bbox
 from leafmachine2.segmentation.detectron2.segment_utils import get_largest_polygon, keep_rows, get_string_indices
 
+
+def _is_cuda_kernel_compat_error(exc):
+    msg = str(exc).lower()
+    return any(err in msg for err in [
+        'no kernel image is available for execution on the device',
+        'not compatible with the current pytorch installation',
+        'unsupported gpu architecture',
+        'cuda capability sm_',
+    ])
+
+
+def _resolve_segmentation_device_list(cfg, logger):
+    requested_device = str(cfg['leafmachine']['project'].get('device', 'cpu')).lower()
+    if requested_device != 'cuda':
+        return ['cpu']
+
+    if not torch.cuda.is_available():
+        logger.warning('CUDA requested for leaf segmentation, but torch.cuda.is_available() is False. Falling back to CPU.')
+        return ['cpu']
+
+    num_available = torch.cuda.device_count()
+    if num_available < 1:
+        logger.warning('CUDA requested for leaf segmentation, but no CUDA devices were detected. Falling back to CPU.')
+        return ['cpu']
+
+    num_requested = int(cfg['leafmachine']['project'].get('num_gpus', 1) or 1)
+    num_to_use = min(max(num_requested, 1), num_available)
+
+    try:
+        compiled_arches = set(torch.cuda.get_arch_list())
+    except Exception:
+        compiled_arches = set()
+
+    if not compiled_arches:
+        logger.warning('Unable to determine CUDA architecture compatibility for leaf segmentation. Falling back to CPU.')
+        return ['cpu']
+
+    device_list = []
+    unsupported_devices = []
+    for gpu_idx in range(num_to_use):
+        try:
+            major, minor = torch.cuda.get_device_capability(gpu_idx)
+            arch = f'sm_{major}{minor}'
+            if arch in compiled_arches:
+                device_list.append(f'cuda:{gpu_idx}')
+            else:
+                gpu_name = torch.cuda.get_device_name(gpu_idx)
+                unsupported_devices.append(f'cuda:{gpu_idx} {gpu_name} ({arch})')
+        except Exception as e:
+            unsupported_devices.append(f'cuda:{gpu_idx} ({e})')
+
+    if device_list:
+        if unsupported_devices:
+            logger.warning(
+                f"Skipping unsupported CUDA devices for leaf segmentation: {', '.join(unsupported_devices)}. "
+                'Using compatible devices only.'
+            )
+        return device_list
+
+    logger.warning(
+        'CUDA requested for leaf segmentation, but no compatible GPU architecture was found in this PyTorch build. '
+        'Falling back to CPU.'
+    )
+    return ['cpu']
+
 def segment_leaves(cfg, time_report, logger, dir_home, Project, batch, n_batches, Dirs): 
     start_t = perf_counter()
     logger.name = f'[BATCH {batch+1} Segment Leaves]'
@@ -42,11 +107,7 @@ def segment_leaves(cfg, time_report, logger, dir_home, Project, batch, n_batches
     else:
         num_workers = int(cfg['leafmachine']['project']['num_workers_seg'])
 
-    if cfg['leafmachine']['project']['device'] == 'cuda':
-        num_gpus = int(cfg['leafmachine']['project'].get('num_gpus', 1))  # Default to 1 GPU if not specified
-        device_list = [f'cuda:{i}' for i in range(num_gpus)]
-    else:
-        device_list = ['cpu']  # Default to CPU if CUDA is not available
+    device_list = _resolve_segmentation_device_list(cfg, logger)
 
     # See convert_index_to_class(ind) for list of ind -> cls
     Project.project_data_list[batch] = unpack_class_from_components(Project.project_data_list[batch], 0, 'Whole_Leaf_BBoxes_YOLO', 'Whole_Leaf_BBoxes', Project)
@@ -257,9 +318,18 @@ def segment_images(logger, dir_home, dict_objects, leaf_type, dict_name_seg, dic
     }
 
     # Initialize PosePredictor
-    Pose_Predictor = PosePredictor(weights, Dirs.dir_oriented_images, Dirs.dir_keypoint_overlay, device=device,
-                                   save_oriented_images=save_oriented_images, save_keypoint_overlay=save_keypoint_overlay, 
-                                   overrides=overrides)
+    try:
+        Pose_Predictor = PosePredictor(weights, Dirs.dir_oriented_images, Dirs.dir_keypoint_overlay, device=device,
+                                       save_oriented_images=save_oriented_images, save_keypoint_overlay=save_keypoint_overlay,
+                                       overrides=overrides)
+    except Exception as e:
+        if device != 'cpu' and _is_cuda_kernel_compat_error(e):
+            logger.warning(f'Pose keypoint model failed on {device}. Retrying on CPU. Original error: {e}')
+            Pose_Predictor = PosePredictor(weights, Dirs.dir_oriented_images, Dirs.dir_keypoint_overlay, device='cpu',
+                                           save_oriented_images=save_oriented_images, save_keypoint_overlay=save_keypoint_overlay,
+                                           overrides=overrides)
+        else:
+            raise
     
     generate_overlay = cfg['leafmachine']['leaf_segmentation']['generate_overlay']
     overlay_dpi = cfg['leafmachine']['leaf_segmentation']['overlay_dpi']

@@ -281,6 +281,14 @@ class PosePredictor(DetectionPredictor):
         self.metadata = {}
         self.args.task = 'pose'
 
+        requested_device = '' if device is None else str(device).strip().lower()
+        if requested_device == 'cuda':
+            requested_device = '0'
+        elif requested_device.startswith('cuda:'):
+            requested_device = requested_device.split(':', 1)[1]
+        if requested_device:
+            self.args.device = requested_device
+
         # Setup model
         self.setup_model(model_path)
 

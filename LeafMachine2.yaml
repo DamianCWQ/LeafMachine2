@@ -122,7 +122,7 @@ leafmachine:
     multimask_output: false
     cuda_sdpa_mode: auto
     cuda_enable_cudnn_sdpa: false
-    device: cuda
+    device: cpu
   logging:
     log_level: null
     suppress_library_info_logs: true
@@ -173,10 +173,10 @@ leafmachine:
     accept_only_ideal_leaves: true # Can be set to false to include leaves with some damage, but may result in more noisy data. If true, only leaves with no damage and no occlusions will be included.
     batch_size: 50
     censor_archival_components: true
-    device: cuda
-    dir_images_local: D:\fyp dataset\small high res
+    device: cpu
+    dir_images_local: C:\Users\User\Documents\Damian\Swinburne\all dataset\small high res
     dir_images_subset: ''
-    dir_output: D:\fyp dataset\outputs\small high res
+    dir_output: C:\Users\User\Documents\Damian\Swinburne\all dataset\outputs\small high res
     hide_archival_components:
     - ruler
     - barcode
