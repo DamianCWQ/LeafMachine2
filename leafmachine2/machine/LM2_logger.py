@@ -5,12 +5,15 @@ def start_logging(Dirs, cfg):
     run_name = cfg['leafmachine']['project']['run_name']
     path_log = os.path.join(Dirs.path_log, '__'.join(['LM2-log',str(get_datetime()), run_name])+'.log')
 
-    # Disable default StreamHandler
-    logging.getLogger().handlers = []
+    # Keep third-party root logging quiet unless there is an actionable warning/error.
+    root_logger = logging.getLogger()
+    root_logger.handlers = []
+    root_logger.setLevel(logging.WARNING)
 
     # create logger
     logger = logging.getLogger('Hardware Components')
     logger.setLevel(logging.DEBUG)
+    logger.propagate = False
 
     # create file handler and set level to debug
     fh = logging.FileHandler(path_log)
@@ -30,6 +33,8 @@ def start_logging(Dirs, cfg):
     # add handlers to logger
     logger.addHandler(fh)
     logger.addHandler(ch)
+
+    _configure_noisy_library_loggers(cfg)
 
     # Create a logger for the file handler
     file_logger = logging.getLogger('file_logger')
@@ -74,6 +79,27 @@ def start_logging(Dirs, cfg):
 
 
     return logger
+
+
+def _configure_noisy_library_loggers(cfg):
+    log_cfg = cfg.get('leafmachine', {}).get('logging', {})
+    suppress_library_info_logs = bool(log_cfg.get('suppress_library_info_logs', True))
+
+    if not suppress_library_info_logs:
+        return
+
+    noisy_loggers = [
+        'detectron2',
+        'detectron2.checkpoint',
+        'detectron2.checkpoint.c2_model_loading',
+        'fvcore',
+        'matplotlib',
+        'PIL',
+        'urllib3',
+    ]
+
+    for logger_name in noisy_loggers:
+        logging.getLogger(logger_name).setLevel(logging.WARNING)
 
 
 def start_worker_logging(worker_id, Dirs, log_name):

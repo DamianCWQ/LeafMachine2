@@ -214,6 +214,8 @@ class _SAM2Segmenter:
         specialization_fallback_to_base=True,
         specialization_requested=False,
         specialization_checkpoint_present=False,
+        cuda_sdpa_mode='auto',
+        cuda_enable_cudnn_sdpa=False,
     ):
         build_sam2, SAM2ImagePredictor = _import_sam2_api(dir_home, logger)
 
@@ -229,6 +231,9 @@ class _SAM2Segmenter:
         self.specialization_loaded = False
         self.fallback_to_base_used = False
         self.specialization_failure_reason = ''
+        self._cuda_sdpa_mode = _normalize_cuda_sdpa_mode(cuda_sdpa_mode)
+        self._cuda_enable_cudnn_sdpa = bool(cuda_enable_cudnn_sdpa)
+        self._sam2_math_attention_forced = False
 
         if self._device.startswith('cuda'):
             self._configure_cuda_sdpa_backend()
@@ -279,14 +284,42 @@ class _SAM2Segmenter:
         if not hasattr(torch.backends, 'cuda'):
             return
 
+        if self._cuda_enable_cudnn_sdpa:
+            os.environ['TORCH_CUDNN_SDPA_ENABLED'] = '1'
+        else:
+            os.environ['TORCH_CUDNN_SDPA_ENABLED'] = '0'
+
+        if hasattr(torch.backends.cuda, 'enable_cudnn_sdp'):
+            try:
+                torch.backends.cuda.enable_cudnn_sdp(self._cuda_enable_cudnn_sdpa)
+            except Exception:
+                # Keep running if this backend flag is not supported by the current torch build.
+                pass
+
+        if self._cuda_sdpa_mode == 'math_only':
+            if hasattr(torch.backends.cuda, 'enable_math_sdp'):
+                torch.backends.cuda.enable_math_sdp(True)
+            if hasattr(torch.backends.cuda, 'enable_flash_sdp'):
+                torch.backends.cuda.enable_flash_sdp(False)
+            if hasattr(torch.backends.cuda, 'enable_mem_efficient_sdp'):
+                torch.backends.cuda.enable_mem_efficient_sdp(False)
+            self._logger.info(
+                f'Configured CUDA SDPA backend to math-only mode (cudnn_sdp={self._cuda_enable_cudnn_sdpa}).'
+            )
+            return
+
+        # auto mode keeps all available kernels enabled and lets PyTorch choose.
         if hasattr(torch.backends.cuda, 'enable_math_sdp'):
             torch.backends.cuda.enable_math_sdp(True)
         if hasattr(torch.backends.cuda, 'enable_flash_sdp'):
-            torch.backends.cuda.enable_flash_sdp(False)
+            torch.backends.cuda.enable_flash_sdp(True)
         if hasattr(torch.backends.cuda, 'enable_mem_efficient_sdp'):
-            torch.backends.cuda.enable_mem_efficient_sdp(False)
+            torch.backends.cuda.enable_mem_efficient_sdp(True)
 
-        self._logger.info('Configured CUDA SDPA backend to math-only for SAM2 compatibility.')
+        self._logger.info(
+            f'Configured CUDA SDPA backend to auto mode (flash/mem-efficient/math, '
+            f'cudnn_sdp={self._cuda_enable_cudnn_sdpa}).'
+        )
 
     def _cuda_sdpa_preflight(self):
         if not self._device.startswith('cuda'):
@@ -294,9 +327,11 @@ class _SAM2Segmenter:
 
         try:
             with torch.no_grad():
-                q = torch.randn((1, 1, 32, 64), device=self._device, dtype=torch.float16)
-                k = torch.randn((1, 1, 32, 64), device=self._device, dtype=torch.float16)
-                v = torch.randn((1, 1, 32, 64), device=self._device, dtype=torch.float16)
+                # Keep sequence length at 64 to avoid cuDNN SDPA frontend constraints
+                # on some Windows/Torch/CuDNN combinations during capability probing.
+                q = torch.randn((1, 1, 64, 64), device=self._device, dtype=torch.float16)
+                k = torch.randn((1, 1, 64, 64), device=self._device, dtype=torch.float16)
+                v = torch.randn((1, 1, 64, 64), device=self._device, dtype=torch.float16)
 
                 with warnings.catch_warnings():
                     self._configure_sdpa_warning_filters()
@@ -307,6 +342,8 @@ class _SAM2Segmenter:
             return True
         except RuntimeError as exc:
             if self._is_cuda_kernel_error(exc):
+                if self._try_relaxed_cuda_backend():
+                    return self._cuda_sdpa_preflight()
                 self._logger.warning(
                     'SAM2 CUDA kernels were unavailable during preflight. '
                     'Using CPU for component segmentation.'
@@ -322,6 +359,7 @@ class _SAM2Segmenter:
         warnings.filterwarnings('ignore', message='.*Flash attention kernel not used because.*')
         warnings.filterwarnings('ignore', message='.*CuDNN attention kernel not used because.*')
         warnings.filterwarnings('ignore', message='.*TORCH_CUDNN_SDPA_ENABLED.*')
+        warnings.filterwarnings('ignore', message='.*USING CUDNN SDPA.*')
 
     def _cuda_predictor_preflight(self):
         dummy_image = np.zeros((128, 128, 3), dtype=np.uint8)
@@ -351,6 +389,8 @@ class _SAM2Segmenter:
                         )
         except RuntimeError as exc:
             if self._is_cuda_kernel_error(exc):
+                if self._try_relaxed_cuda_backend():
+                    return self._cuda_predictor_preflight()
                 self._fallback_to_cpu()
                 return
             raise
@@ -381,10 +421,17 @@ class _SAM2Segmenter:
             'no available kernel' in err_str
             or 'no available backend' in err_str
             or 'no execution plans support the graph' in err_str
+            or 'cudnn frontend error' in err_str
         )
 
     def _make_sdp_context(self):
-        if self._device.startswith('cuda') and hasattr(torch.backends, 'cuda') and hasattr(torch.backends.cuda, 'sdp_kernel'):
+        if not self._device.startswith('cuda'):
+            return nullcontext()
+
+        if self._cuda_sdpa_mode != 'math_only':
+            return nullcontext()
+
+        if hasattr(torch.backends, 'cuda') and hasattr(torch.backends.cuda, 'sdp_kernel'):
             try:
                 return torch.backends.cuda.sdp_kernel(
                     enable_flash=False,
@@ -403,12 +450,18 @@ class _SAM2Segmenter:
         sdp_context = self._make_sdp_context()
 
         try:
-            with sdp_context:
-                self._predictor.set_image(image_rgb)
+            with warnings.catch_warnings():
+                self._configure_sdpa_warning_filters()
+                with sdp_context:
+                    self._predictor.set_image(image_rgb)
             self._active_image_token = image_token
             return
         except RuntimeError as exc:
-            if not self._is_cuda_kernel_error(exc) or not self._fallback_to_cpu():
+            if not self._is_cuda_kernel_error(exc):
+                raise
+            if self._try_relaxed_cuda_backend():
+                return self._ensure_image_embeddings(image_rgb, image_token)
+            if not self._fallback_to_cpu():
                 raise
 
         self._predictor.set_image(image_rgb)
@@ -444,22 +497,26 @@ class _SAM2Segmenter:
         sdp_context = self._make_sdp_context()
 
         try:
-            with sdp_context:
-                try:
-                    masks, scores, _ = self._predictor.predict(
-                        point_coords=None,
-                        point_labels=None,
-                        box=box[None, :],
-                        multimask_output=multimask_output,
-                    )
-                except TypeError:
-                    masks, scores, _ = self._predictor.predict(
-                        point_coords=None,
-                        point_labels=None,
-                        box=box,
-                        multimask_output=multimask_output,
-                    )
+            with warnings.catch_warnings():
+                self._configure_sdpa_warning_filters()
+                with sdp_context:
+                    try:
+                        masks, scores, _ = self._predictor.predict(
+                            point_coords=None,
+                            point_labels=None,
+                            box=box[None, :],
+                            multimask_output=multimask_output,
+                        )
+                    except TypeError:
+                        masks, scores, _ = self._predictor.predict(
+                            point_coords=None,
+                            point_labels=None,
+                            box=box,
+                            multimask_output=multimask_output,
+                        )
         except RuntimeError as exc:
+            if self._is_cuda_kernel_error(exc) and self._try_relaxed_cuda_backend():
+                return self.predict(image_rgb, bbox_xyxy, multimask_output)
             if self._is_cuda_kernel_error(exc) and self._fallback_to_cpu():
                 self._ensure_image_embeddings(image_rgb, image_token)
                 try:
@@ -491,6 +548,64 @@ class _SAM2Segmenter:
 
         mask = np.asarray(masks[best_idx]).astype(bool)
         return mask, best_score
+
+    def _try_relaxed_cuda_backend(self):
+        if not self._device.startswith('cuda'):
+            return False
+
+        if self._cuda_enable_cudnn_sdpa:
+            self._logger.warning(
+                'CUDA kernel error encountered with cuDNN SDPA enabled. '
+                'Retrying once with cuDNN SDPA disabled.'
+            )
+            self._cuda_enable_cudnn_sdpa = False
+            self._configure_cuda_sdpa_backend()
+            self._active_image_token = None
+            return True
+
+        if self._force_sam2_math_attention():
+            return True
+
+        if self._cuda_sdpa_mode == 'auto':
+            return False
+
+        self._logger.warning(
+            f'CUDA kernel error encountered in SDPA mode "{self._cuda_sdpa_mode}". '
+            'Retrying once with auto CUDA SDPA backend before CPU fallback.'
+        )
+        self._cuda_sdpa_mode = 'auto'
+        self._configure_cuda_sdpa_backend()
+        self._active_image_token = None
+        return True
+
+    def _force_sam2_math_attention(self):
+        if self._sam2_math_attention_forced:
+            return False
+
+        patched_any = False
+        for module_name in ('sam2.modeling.sam.transformer', 'sam2.sam2.modeling.sam.transformer'):
+            try:
+                transformer_module = importlib.import_module(module_name)
+            except Exception:
+                continue
+
+            if not hasattr(transformer_module, 'MATH_KERNEL_ON') or not hasattr(transformer_module, 'USE_FLASH_ATTN'):
+                continue
+
+            transformer_module.MATH_KERNEL_ON = True
+            transformer_module.USE_FLASH_ATTN = False
+            patched_any = True
+
+        if not patched_any:
+            return False
+
+        self._sam2_math_attention_forced = True
+        self._logger.warning(
+            'CUDA kernel error encountered with SAM2 flash-attention path. '
+            'Retrying once with SAM2 math attention enabled.'
+        )
+        self._active_image_token = None
+        return True
 
 
 def _import_sam2_api(dir_home, logger):
@@ -553,6 +668,8 @@ def _get_or_create_segmenter(seg_cfg, cfg, dir_home, logger):
     sam2_checkpoint = _resolve_path(dir_home, seg_cfg.get('sam2_checkpoint', ''))
     plantsam_checkpoint = _resolve_path(dir_home, seg_cfg.get('plantsam_checkpoint', ''))
     specialization_fallback_to_base = bool(seg_cfg.get('specialization_fallback_to_base', True))
+    cuda_sdpa_mode = _normalize_cuda_sdpa_mode(seg_cfg.get('cuda_sdpa_mode', 'auto'))
+    cuda_enable_cudnn_sdpa = bool(seg_cfg.get('cuda_enable_cudnn_sdpa', False))
     specialization_requested = bool(seg_cfg.get('plantsam_checkpoint', ''))
     specialization_checkpoint_present = bool(plantsam_checkpoint and os.path.isfile(plantsam_checkpoint))
     specialization_checkpoint_for_model = plantsam_checkpoint if specialization_checkpoint_present else ''
@@ -585,6 +702,8 @@ def _get_or_create_segmenter(seg_cfg, cfg, dir_home, logger):
         plantsam_checkpoint,
         specialization_checkpoint_for_model,
         specialization_fallback_to_base,
+        cuda_sdpa_mode,
+        cuda_enable_cudnn_sdpa,
         specialization_requested,
         device,
     )
@@ -600,6 +719,8 @@ def _get_or_create_segmenter(seg_cfg, cfg, dir_home, logger):
             specialization_fallback_to_base=specialization_fallback_to_base,
             specialization_requested=specialization_requested,
             specialization_checkpoint_present=specialization_checkpoint_present,
+            cuda_sdpa_mode=cuda_sdpa_mode,
+            cuda_enable_cudnn_sdpa=cuda_enable_cudnn_sdpa,
         )
 
     return _SEGMENTER_CACHE[cache_key]
@@ -621,6 +742,15 @@ def _resolve_device(seg_cfg, cfg, logger):
         logger.warning('CUDA requested for component segmentation, but CUDA is unavailable. Falling back to CPU.')
 
     return 'cpu'
+
+
+def _normalize_cuda_sdpa_mode(raw_mode):
+    mode = str(raw_mode or 'auto').strip().lower()
+    if mode in {'math', 'math-only', 'math_only'}:
+        return 'math_only'
+    if mode in {'auto', 'default'}:
+        return 'auto'
+    return 'auto'
 
 
 def _resolve_path(dir_home, input_path):

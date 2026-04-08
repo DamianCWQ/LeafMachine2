@@ -45,7 +45,8 @@ def build_LM2_config():
     }
 
     logging_section = {
-        'log_level': None
+        'log_level': None,
+        'suppress_library_info_logs': True,
     }
 
     default_output_folder = get_default_download_folder()
@@ -271,6 +272,8 @@ def build_LM2_config():
         'save_polygon_json': True,
         'save_overlay_images': True,
         'multimask_output': False,
+        'cuda_sdpa_mode': 'auto',
+        'cuda_enable_cudnn_sdpa': False,
         'device': 'cuda',
     }
 
