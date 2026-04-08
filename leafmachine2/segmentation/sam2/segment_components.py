@@ -26,6 +26,13 @@ PLANT_COMPONENT_CLASS_MAP = {
     10: 'wood',
 }
 
+DEFAULT_EXCLUDED_CLASS_IDS = {0, 1}
+CLASS_ID_SOURCE_OF_TRUTH = {
+    0: 'leaf_whole',
+    1: 'leaf_partial',
+    2: 'leaflet',
+}
+
 _SEGMENTER_CACHE = {}
 
 
@@ -38,22 +45,28 @@ def segment_plant_components(cfg, time_report, logger, dir_home, Project, batch,
     if not seg_cfg.get('enable', False):
         return Project, time_report
 
-    try:
-        segmenter = _get_or_create_segmenter(seg_cfg, cfg, dir_home, logger)
-    except Exception as exc:
-        logger.warning(f'Plant component segmentation disabled for this run: {exc}')
-        for _, analysis in Project.project_data_list[batch].items():
-            analysis['Segmentation_Plant_Components'] = []
-        end_t = perf_counter()
-        t_seg_components = (
-            f"[Batch {batch+1}/{n_batches}: Plant Component Segmentation elapsed time] "
-            f"{round(end_t - start_t)} seconds ({round((end_t - start_t) / 60)} minutes)"
-        )
-        logger.info(t_seg_components)
-        time_report['t_seg_components'] = t_seg_components
-        return Project, time_report
+    _audit_class_id_source_of_truth(logger)
 
-    class_filter = _parse_segment_classes(seg_cfg.get('segment_classes', list(range(11))))
+    class_filter, class_policy = _resolve_segment_class_policy(seg_cfg, logger)
+    fallback_enabled = bool(seg_cfg.get('specialization_fallback_to_base', True))
+    overlay_cfg = cfg['leafmachine'].get('overlay', {})
+    overlay_draw_enabled = bool(
+        overlay_cfg.get(
+            'show_plant_component_segmentations',
+            overlay_cfg.get('show_segmentations', True),
+        )
+    )
+
+    segmenter = _get_or_create_segmenter(seg_cfg, cfg, dir_home, logger)
+
+    logger.info(
+        'Plant component segmentation policy | '
+        f"active_class_ids={class_policy['active_class_ids']} "
+        f"fallback_enabled={fallback_enabled} "
+        f"specialization_checkpoint_present={segmenter.specialization_checkpoint_present} "
+        f"overlay_draw_enabled={overlay_draw_enabled}"
+    )
+
     minimum_detection_confidence = float(seg_cfg.get('minimum_detection_confidence', 0.0))
     minimum_bbox_size_px = int(seg_cfg.get('minimum_bbox_size_px', 12))
     multimask_output = bool(seg_cfg.get('multimask_output', False))
@@ -62,6 +75,18 @@ def segment_plant_components(cfg, time_report, logger, dir_home, Project, batch,
     save_masked_rgb = bool(seg_cfg.get('save_masked_rgb', True))
     save_polygon_json = bool(seg_cfg.get('save_polygon_json', True))
     save_overlay_images = bool(seg_cfg.get('save_overlay_images', True))
+
+    batch_stats = {
+        'detections_total': 0,
+        'detections_filtered_out': 0,
+        'detections_attempted': 0,
+        'segmented_success': 0,
+        'segmented_failed': 0,
+        'empty_masks': 0,
+        'specialization_loaded': bool(segmenter.specialization_loaded),
+        'fallback_to_base_used': bool(segmenter.fallback_to_base_used),
+        'skipped_classes_0_1': 0,
+    }
 
     for filename, analysis in Project.project_data_list[batch].items():
         analysis['Segmentation_Plant_Components'] = []
@@ -78,33 +103,47 @@ def segment_plant_components(cfg, time_report, logger, dir_home, Project, batch,
         image_h, image_w = image_rgb.shape[:2]
 
         for det_idx, detection in enumerate(detections):
+            batch_stats['detections_total'] += 1
             det = _coerce_detection(detection)
             if det is None:
+                batch_stats['detections_filtered_out'] += 1
                 continue
 
             class_id = int(det[0])
             if class_id not in class_filter:
+                batch_stats['detections_filtered_out'] += 1
+                if class_id in DEFAULT_EXCLUDED_CLASS_IDS:
+                    batch_stats['skipped_classes_0_1'] += 1
                 continue
 
             det_score = float(det[5]) if len(det) > 5 else None
             if (det_score is not None) and (det_score < minimum_detection_confidence):
+                batch_stats['detections_filtered_out'] += 1
                 continue
 
             bbox_xyxy = _normalized_xywh_to_xyxy(det[1:5], image_w, image_h, minimum_bbox_size_px)
             if bbox_xyxy is None:
+                batch_stats['detections_filtered_out'] += 1
                 continue
 
+            batch_stats['detections_attempted'] += 1
             try:
                 mask, seg_score = segmenter.predict(image_rgb, bbox_xyxy, multimask_output)
             except Exception as exc:
-                logger.warning(f'Component segmentation failed on {filename}: {exc}')
+                logger.warning(
+                    'runtime_inference_failure | '
+                    f'file={filename} class_id={class_id} reason={exc}'
+                )
+                batch_stats['segmented_failed'] += 1
                 continue
 
             if mask is None:
+                batch_stats['empty_masks'] += 1
                 continue
 
             annotation_dict, contour = _build_annotation_from_mask(mask)
             if annotation_dict is None:
+                batch_stats['empty_masks'] += 1
                 continue
 
             class_name = PLANT_COMPONENT_CLASS_MAP.get(class_id, f'class_{class_id}')
@@ -131,11 +170,13 @@ def segment_plant_components(cfg, time_report, logger, dir_home, Project, batch,
             annotation_dict['class_name'] = class_name
             annotation_dict['detector_score'] = det_score
             annotation_dict['segmentation_score'] = seg_score
+            annotation_dict['coordinate_system'] = 'absolute_image_xy'
             annotation_dict.update(artifact_paths)
 
             analysis['Segmentation_Plant_Components'].append(
                 {component_name: [{annotation_name: annotation_dict}]}
             )
+            batch_stats['segmented_success'] += 1
 
     end_t = perf_counter()
     t_seg_components = (
@@ -143,12 +184,37 @@ def segment_plant_components(cfg, time_report, logger, dir_home, Project, batch,
         f"{round(end_t - start_t)} seconds ({round((end_t - start_t) / 60)} minutes)"
     )
     logger.info(t_seg_components)
+    logger.info(f'Plant component segmentation stats | {json.dumps(batch_stats, sort_keys=True)}')
+
+    policy_snapshot = {
+        'active_class_ids': class_policy['active_class_ids'],
+        'fallback_enabled': fallback_enabled,
+        'specialization_checkpoint_present': bool(segmenter.specialization_checkpoint_present),
+        'specialization_loaded': bool(segmenter.specialization_loaded),
+        'fallback_to_base_used': bool(segmenter.fallback_to_base_used),
+        'specialization_failure_reason': segmenter.specialization_failure_reason,
+        'overlay_draw_enabled': overlay_draw_enabled,
+    }
+
     time_report['t_seg_components'] = t_seg_components
+    time_report[f't_seg_components_stats_batch_{batch+1}'] = json.dumps(batch_stats, sort_keys=True)
+    time_report[f't_seg_components_policy_batch_{batch+1}'] = json.dumps(policy_snapshot, sort_keys=True)
     return Project, time_report
 
 
 class _SAM2Segmenter:
-    def __init__(self, model_cfg_path, sam2_checkpoint_path, plantsam_checkpoint_path, device, dir_home, logger):
+    def __init__(
+        self,
+        model_cfg_path,
+        sam2_checkpoint_path,
+        plantsam_checkpoint_path,
+        device,
+        dir_home,
+        logger,
+        specialization_fallback_to_base=True,
+        specialization_requested=False,
+        specialization_checkpoint_present=False,
+    ):
         build_sam2, SAM2ImagePredictor = _import_sam2_api(dir_home, logger)
 
         self._device = device
@@ -156,6 +222,13 @@ class _SAM2Segmenter:
         self._predictor_cls = SAM2ImagePredictor
         self._cpu_fallback_triggered = False
         self._active_image_token = None
+        self.specialization_fallback_to_base = bool(specialization_fallback_to_base)
+        self.specialization_requested = bool(specialization_requested)
+        self.specialization_checkpoint_present = bool(specialization_checkpoint_present)
+        self.specialization_checkpoint_path = plantsam_checkpoint_path
+        self.specialization_loaded = False
+        self.fallback_to_base_used = False
+        self.specialization_failure_reason = ''
 
         if self._device.startswith('cuda'):
             self._configure_cuda_sdpa_backend()
@@ -164,8 +237,38 @@ class _SAM2Segmenter:
 
         self._model = build_sam2(model_cfg_path, sam2_checkpoint_path, device=self._device)
 
+        if self.specialization_requested and not self.specialization_checkpoint_present:
+            if self.specialization_fallback_to_base:
+                self.fallback_to_base_used = True
+                self.specialization_failure_reason = 'specialization_checkpoint_missing'
+                logger.warning(
+                    'specialization_checkpoint_missing | '
+                    'PlantSAM specialization checkpoint was configured but not found. '
+                    'Continuing with SAM2 base weights only.'
+                )
+            else:
+                raise FileNotFoundError(
+                    f'PlantSAM specialization checkpoint not found: {plantsam_checkpoint_path}'
+                )
+
         if plantsam_checkpoint_path and os.path.abspath(plantsam_checkpoint_path) != os.path.abspath(sam2_checkpoint_path):
-            self._load_plantsam_weights(plantsam_checkpoint_path, logger)
+            try:
+                self._load_plantsam_weights(plantsam_checkpoint_path, logger)
+                self.specialization_loaded = True
+            except Exception as exc:
+                if self.specialization_fallback_to_base:
+                    self.fallback_to_base_used = True
+                    self.specialization_failure_reason = f'specialization_load_incompatible: {exc}'
+                    logger.warning(
+                        'specialization_load_incompatible | '
+                        'PlantSAM specialization weights could not be loaded into SAM2. '
+                        f'Continuing with SAM2 base weights only. Reason: {exc}'
+                    )
+                else:
+                    raise RuntimeError(
+                        'PlantSAM specialization checkpoint was provided but could not be loaded '
+                        f'into SAM2: {exc}'
+                    ) from exc
 
         self._predictor = SAM2ImagePredictor(self._model)
 
@@ -321,8 +424,7 @@ class _SAM2Segmenter:
                     break
 
         if not isinstance(checkpoint, dict):
-            logger.warning('PlantSAM checkpoint format was not recognized, using base SAM2 checkpoint only.')
-            return
+            raise ValueError('PlantSAM checkpoint format was not recognized')
 
         if all(key.startswith('module.') for key in checkpoint.keys()):
             checkpoint = {key.replace('module.', '', 1): value for key, value in checkpoint.items()}
@@ -330,7 +432,7 @@ class _SAM2Segmenter:
         target_model = self._model.module if hasattr(self._model, 'module') else self._model
         incompatible = target_model.load_state_dict(checkpoint, strict=False)
         logger.info(
-            'Loaded PlantSAM checkpoint with '
+            'Loaded PlantSAM specialization checkpoint with '
             f"{len(incompatible.missing_keys)} missing keys and {len(incompatible.unexpected_keys)} unexpected keys"
         )
 
@@ -450,6 +552,10 @@ def _get_or_create_segmenter(seg_cfg, cfg, dir_home, logger):
     model_cfg = _resolve_path(dir_home, seg_cfg.get('sam2_model_config', ''))
     sam2_checkpoint = _resolve_path(dir_home, seg_cfg.get('sam2_checkpoint', ''))
     plantsam_checkpoint = _resolve_path(dir_home, seg_cfg.get('plantsam_checkpoint', ''))
+    specialization_fallback_to_base = bool(seg_cfg.get('specialization_fallback_to_base', True))
+    specialization_requested = bool(seg_cfg.get('plantsam_checkpoint', ''))
+    specialization_checkpoint_present = bool(plantsam_checkpoint and os.path.isfile(plantsam_checkpoint))
+    specialization_checkpoint_for_model = plantsam_checkpoint if specialization_checkpoint_present else ''
 
     if not model_cfg:
         raise ValueError('Missing plant_component_segmentation.sam2_model_config')
@@ -464,20 +570,36 @@ def _get_or_create_segmenter(seg_cfg, cfg, dir_home, logger):
         raise FileNotFoundError(f'SAM2 model config file not found: {model_cfg}')
     if not os.path.isfile(sam2_checkpoint):
         raise FileNotFoundError(f'SAM2 checkpoint file not found: {sam2_checkpoint}')
-    if plantsam_checkpoint and not os.path.isfile(plantsam_checkpoint):
+    if specialization_requested and not specialization_checkpoint_present and not specialization_fallback_to_base:
         raise FileNotFoundError(f'PlantSAM checkpoint file not found: {plantsam_checkpoint}')
+    if specialization_requested and not specialization_checkpoint_present and specialization_fallback_to_base:
+        logger.warning(
+            'specialization_checkpoint_missing | PlantSAM specialization checkpoint is missing. '
+            'specialization_fallback_to_base is enabled, so SAM2 base weights will be used.'
+        )
 
     device = _resolve_device(seg_cfg, cfg, logger)
-    cache_key = (model_cfg, sam2_checkpoint, plantsam_checkpoint, device)
+    cache_key = (
+        model_cfg,
+        sam2_checkpoint,
+        plantsam_checkpoint,
+        specialization_checkpoint_for_model,
+        specialization_fallback_to_base,
+        specialization_requested,
+        device,
+    )
 
     if cache_key not in _SEGMENTER_CACHE:
         _SEGMENTER_CACHE[cache_key] = _SAM2Segmenter(
             model_cfg,
             sam2_checkpoint,
-            plantsam_checkpoint,
+            specialization_checkpoint_for_model,
             device,
             dir_home,
             logger,
+            specialization_fallback_to_base=specialization_fallback_to_base,
+            specialization_requested=specialization_requested,
+            specialization_checkpoint_present=specialization_checkpoint_present,
         )
 
     return _SEGMENTER_CACHE[cache_key]
@@ -513,8 +635,14 @@ def _resolve_path(dir_home, input_path):
 
 
 def _parse_segment_classes(raw_classes):
+    if raw_classes is None:
+        return set()
+
     if isinstance(raw_classes, str):
         raw_classes = [item.strip() for item in raw_classes.split(',') if item.strip()]
+
+    if not isinstance(raw_classes, (list, tuple, set)):
+        return set()
 
     classes = set()
     for raw_class in raw_classes:
@@ -523,10 +651,70 @@ def _parse_segment_classes(raw_classes):
         except (TypeError, ValueError):
             continue
 
-    if not classes:
-        return set(range(11))
-
     return classes
+
+
+def _resolve_segment_class_policy(seg_cfg, logger):
+    all_class_ids = set(PLANT_COMPONENT_CLASS_MAP.keys())
+
+    explicit_raw = seg_cfg.get('segment_classes', None)
+    explicit_ids = _parse_segment_classes(explicit_raw)
+    explicit_configured = explicit_raw is not None
+
+    if explicit_configured and explicit_ids:
+        active_ids = explicit_ids & all_class_ids
+        policy_source = 'segment_classes'
+        excluded_ids = sorted((all_class_ids - active_ids))
+    else:
+        include_ids = _parse_segment_classes(seg_cfg.get('segment_classes_include', None))
+        exclude_raw = seg_cfg.get('segment_classes_exclude', sorted(DEFAULT_EXCLUDED_CLASS_IDS))
+        exclude_ids = _parse_segment_classes(exclude_raw)
+
+        if include_ids:
+            active_ids = include_ids & all_class_ids
+            policy_source = 'segment_classes_include/segment_classes_exclude'
+        else:
+            active_ids = set(all_class_ids)
+            policy_source = 'default_all_classes_minus_segment_classes_exclude'
+
+        active_ids -= (exclude_ids & all_class_ids)
+        excluded_ids = sorted((exclude_ids & all_class_ids))
+
+    if not active_ids:
+        logger.warning(
+            'No valid segment classes resolved from configuration; '
+            'falling back to default active classes [2-10].'
+        )
+        active_ids = set(all_class_ids) - DEFAULT_EXCLUDED_CLASS_IDS
+        policy_source = 'fallback_default_active_classes_2_to_10'
+        excluded_ids = sorted(DEFAULT_EXCLUDED_CLASS_IDS)
+
+    policy = {
+        'active_class_ids': sorted(active_ids),
+        'excluded_class_ids': excluded_ids,
+        'policy_source': policy_source,
+    }
+
+    return active_ids, policy
+
+
+def _audit_class_id_source_of_truth(logger):
+    mismatches = []
+    for class_id, expected_name in CLASS_ID_SOURCE_OF_TRUTH.items():
+        observed_name = PLANT_COMPONENT_CLASS_MAP.get(class_id)
+        if observed_name != expected_name:
+            mismatches.append((class_id, expected_name, observed_name))
+
+    if mismatches:
+        details = '; '.join(
+            [f'id {class_id}: expected {expected}, observed {observed}' for class_id, expected, observed in mismatches]
+        )
+        raise ValueError(f'Plant component class map audit failed: {details}')
+
+    logger.info(
+        'Plant component class audit passed | '
+        f"0={PLANT_COMPONENT_CLASS_MAP[0]} 1={PLANT_COMPONENT_CLASS_MAP[1]} 2={PLANT_COMPONENT_CLASS_MAP[2]}"
+    )
 
 
 def _read_image_any_extension(image_dir, filename):
@@ -674,6 +862,7 @@ def _save_artifacts(
             'centroid': annotation_dict['centroid'],
             'area': annotation_dict['area'],
             'perimeter': annotation_dict['perimeter'],
+            'coordinate_system': 'absolute_image_xy',
         }
         with open(polygon_path, 'w', encoding='utf-8') as fp:
             json.dump(polygon_payload, fp)

@@ -99,8 +99,6 @@ leafmachine:
     sam2_checkpoint: 'weights\sam2\sam2_hiera_large.pt'
     plantsam_checkpoint: 'weights\plantsam\BBS2_1024_2_epoch5.torch'
     segment_classes:
-    - 0
-    - 1
     - 2
     - 3
     - 4
@@ -110,6 +108,11 @@ leafmachine:
     - 8
     - 9
     - 10
+    segment_classes_include: []
+    segment_classes_exclude:
+    - 0
+    - 1
+    specialization_fallback_to_base: true
     minimum_detection_confidence: 0.0
     minimum_bbox_size_px: 12
     save_mask_png: true
@@ -126,8 +129,12 @@ leafmachine:
   overlay:
     alpha_transparency_archival: 0.3
     alpha_transparency_plant: 0.0
+    alpha_transparency_seg_plant_components: 0.35
     alpha_transparency_seg_partial_leaf: 0.3
     alpha_transparency_seg_whole_leaf: 0.4
+    draw_plant_component_segmentation_bbox: true
+    draw_plant_component_segmentation_labels: true
+    draw_plant_component_segmentation_polygon: true
     ignore_archival_detections_classes: []
     ignore_landmark_classes: []
     ignore_plant_detections_classes:
@@ -135,13 +142,16 @@ leafmachine:
     line_width_archival: 2
     line_width_efd: 2
     line_width_plant: 2
+    line_width_plant_component_segmentation: 2
     line_width_seg: 2
     overlay_background_color: black
     overlay_dpi: 300
+    plant_component_segmentation_draw_order: after_leaf_masks
     save_overlay_to_jpgs: true
     save_overlay_to_pdf: false
     show_archival_detections: true
     show_landmarks: true
+    show_plant_component_segmentations: true
     show_plant_detections: true
     show_segmentations: true
   plant_component_detector:
@@ -161,9 +171,9 @@ leafmachine:
     batch_size: 50
     censor_archival_components: true
     device: cuda
-    dir_images_local: C:\Users\damia\OneDrive\Documents\Damian\Swinburne\FYP\small dataset2
+    dir_images_local: D:\fyp dataset\small high res
     dir_images_subset: ''
-    dir_output: C:\Users\damia\OneDrive\Documents\Damian\Swinburne\FYP\small dataset2\output_sam
+    dir_output: D:\fyp dataset\outputs\small high res
     hide_archival_components:
     - ruler
     - barcode
@@ -176,9 +186,9 @@ leafmachine:
     minimum_total_reproductive_counts: 0
     n_images_per_species: 10
     num_gpus: 1
-    num_workers: 1
-    num_workers_ruler: 1
-    num_workers_seg: 1
+    num_workers: 2
+    num_workers_ruler: 2
+    num_workers_seg: 2
     overlay_background_color: black
     overlay_dpi: 300
     path_combined_csv_local: null

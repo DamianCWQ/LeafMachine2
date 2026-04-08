@@ -28,6 +28,16 @@ def build_custom_overlay_parallel(cfg, time_report, logger, dir_home, Project, b
     show_segmentations = cfg['leafmachine']['overlay']['show_segmentations']
     show_landmarks = cfg['leafmachine']['overlay']['show_landmarks']
     ignore_landmarks = cfg['leafmachine']['overlay']['ignore_landmark_classes']
+    plant_seg_overlay_policy = _resolve_plant_component_overlay_policy(cfg)
+
+    logger.info(
+        'Plant component overlay policy | '
+        f"show={plant_seg_overlay_policy['show']} "
+        f"draw_order={plant_seg_overlay_policy['draw_order']} "
+        f"draw_polygon={plant_seg_overlay_policy['draw_polygon']} "
+        f"draw_bbox={plant_seg_overlay_policy['draw_bbox']} "
+        f"draw_labels={plant_seg_overlay_policy['draw_labels']}"
+    )
 
     lock = Lock()  # Create a lock object
 
@@ -101,6 +111,8 @@ def process_file(Project, filename, analysis, line_w_archival, show_archival, ig
     else:
         Segmentation_Partial_Leaf = []
 
+    Segmentation_Plant_Components = analysis.get('Segmentation_Plant_Components', [])
+
     if cfg['leafmachine']['landmark_detector']['landmark_whole_leaves']:
         if 'Landmarks_Whole_Leaves' in analysis:
             Landmarks_Whole_Leaves = analysis['Landmarks_Whole_Leaves']
@@ -139,7 +151,14 @@ def process_file(Project, filename, analysis, line_w_archival, show_archival, ig
 
         image_overlay = add_plant_detections(image_overlay, plant, height, width, line_w_plant, show_plant, ignore_plant, cfg)
 
-        image_overlay = add_segmentations(image_overlay, Segmentation_Whole_Leaf, Segmentation_Partial_Leaf, show_segmentations, cfg)
+        image_overlay = add_segmentations_with_plant_components(
+            image_overlay,
+            Segmentation_Whole_Leaf,
+            Segmentation_Partial_Leaf,
+            Segmentation_Plant_Components,
+            show_segmentations,
+            cfg,
+        )
 
         image_overlay = add_landmarks(image_overlay, Landmarks_Whole_Leaves, Landmarks_Partial_Leaves, show_landmarks, cfg)
 
@@ -164,6 +183,16 @@ def build_custom_overlay(cfg, logger, dir_home, Project, batch, Dirs):
     show_segmentations = cfg['leafmachine']['overlay']['show_segmentations']
     show_landmarks = cfg['leafmachine']['overlay']['show_landmarks']
     ignore_landmarks = cfg['leafmachine']['overlay']['ignore_landmark_classes']
+    plant_seg_overlay_policy = _resolve_plant_component_overlay_policy(cfg)
+
+    logger.info(
+        'Plant component overlay policy | '
+        f"show={plant_seg_overlay_policy['show']} "
+        f"draw_order={plant_seg_overlay_policy['draw_order']} "
+        f"draw_polygon={plant_seg_overlay_policy['draw_polygon']} "
+        f"draw_bbox={plant_seg_overlay_policy['draw_bbox']} "
+        f"draw_labels={plant_seg_overlay_policy['draw_labels']}"
+    )
 
     filenames = []
     overlay_images = []
@@ -215,6 +244,8 @@ def build_custom_overlay(cfg, logger, dir_home, Project, batch, Dirs):
         else:
             Segmentation_Partial_Leaf = []
 
+        Segmentation_Plant_Components = analysis.get('Segmentation_Plant_Components', [])
+
         if cfg['leafmachine']['landmark_detector']['landmark_whole_leaves']:
             if 'Landmarks_Whole_Leaves' in analysis:
                 Landmarks_Whole_Leaves = analysis['Landmarks_Whole_Leaves']
@@ -244,7 +275,14 @@ def build_custom_overlay(cfg, logger, dir_home, Project, batch, Dirs):
 
         image_overlay = add_plant_detections(image_overlay, plant, height, width, line_w_plant, show_plant, ignore_plant, cfg)
 
-        image_overlay = add_segmentations(image_overlay, Segmentation_Whole_Leaf, Segmentation_Partial_Leaf, show_segmentations, cfg)
+        image_overlay = add_segmentations_with_plant_components(
+            image_overlay,
+            Segmentation_Whole_Leaf,
+            Segmentation_Partial_Leaf,
+            Segmentation_Plant_Components,
+            show_segmentations,
+            cfg,
+        )
 
         image_overlay = add_landmarks(image_overlay, Landmarks_Whole_Leaves, Landmarks_Partial_Leaves, show_landmarks, cfg)
         
@@ -323,6 +361,137 @@ def add_landmarks(image_overlay, Landmarks_Whole_Leaves, Landmarks_Partial_Leave
             # cv2.imshow('overlay', im_show)
             # cv2.waitKey(0)
     return image_overlay
+
+
+def add_segmentations_with_plant_components(
+    image_overlay,
+    Segmentation_Whole_Leaf,
+    Segmentation_Partial_Leaf,
+    Segmentation_Plant_Components,
+    show_segmentations,
+    cfg,
+):
+    overlay_policy = _resolve_plant_component_overlay_policy(cfg)
+
+    if overlay_policy['draw_order'] == 'before_leaf_masks':
+        image_overlay = add_plant_component_segmentations(
+            image_overlay,
+            Segmentation_Plant_Components,
+            overlay_policy,
+            cfg,
+        )
+        image_overlay = add_segmentations(
+            image_overlay,
+            Segmentation_Whole_Leaf,
+            Segmentation_Partial_Leaf,
+            show_segmentations,
+            cfg,
+        )
+        return image_overlay
+
+    image_overlay = add_segmentations(
+        image_overlay,
+        Segmentation_Whole_Leaf,
+        Segmentation_Partial_Leaf,
+        show_segmentations,
+        cfg,
+    )
+    image_overlay = add_plant_component_segmentations(
+        image_overlay,
+        Segmentation_Plant_Components,
+        overlay_policy,
+        cfg,
+    )
+    return image_overlay
+
+
+def _resolve_plant_component_overlay_policy(cfg):
+    overlay_cfg = cfg['leafmachine'].get('overlay', {})
+
+    draw_order = str(overlay_cfg.get('plant_component_segmentation_draw_order', 'after_leaf_masks')).lower()
+    if draw_order not in {'before_leaf_masks', 'after_leaf_masks'}:
+        draw_order = 'after_leaf_masks'
+
+    return {
+        'show': bool(overlay_cfg.get('show_plant_component_segmentations', overlay_cfg.get('show_segmentations', True))),
+        'draw_order': draw_order,
+        'draw_polygon': bool(overlay_cfg.get('draw_plant_component_segmentation_polygon', True)),
+        'draw_bbox': bool(overlay_cfg.get('draw_plant_component_segmentation_bbox', True)),
+        'draw_labels': bool(overlay_cfg.get('draw_plant_component_segmentation_labels', True)),
+        'line_width': int(overlay_cfg.get('line_width_plant_component_segmentation', overlay_cfg.get('line_width_plant', 1))),
+    }
+
+
+def add_plant_component_segmentations(image_overlay, segmentation_data, overlay_policy, cfg):
+    if not overlay_policy['show']:
+        return image_overlay
+
+    if not segmentation_data:
+        return image_overlay
+
+    draw = ImageDraw.Draw(image_overlay, 'RGBA')
+    for component_entry in segmentation_data:
+        for _, annotations in component_entry.items():
+            for annotation in annotations:
+                annotation_name, annotation_data = next(iter(annotation.items()))
+
+                coordinate_system = annotation_data.get('coordinate_system', 'absolute_image_xy')
+                if coordinate_system != 'absolute_image_xy':
+                    continue
+
+                class_name = str(annotation_data.get('class_name', '')).lower()
+                if not class_name:
+                    class_name = annotation_name.split('_')[0].lower()
+
+                try:
+                    c_outline, c_fill = get_color(class_name, 'SEG_PLANT_COMPONENT', cfg)
+                except KeyError:
+                    c_outline, c_fill = (255, 255, 255), (255, 255, 255, 80)
+
+                polygon = _coerce_absolute_points(annotation_data.get('polygon_closed', []))
+                bbox = _coerce_absolute_points(annotation_data.get('bbox', []))
+
+                if overlay_policy['draw_polygon'] and polygon:
+                    draw.polygon(polygon, fill=c_fill, outline=c_outline, width=overlay_policy['line_width'])
+
+                if overlay_policy['draw_bbox'] and bbox:
+                    draw.polygon(bbox, fill=None, outline=c_outline, width=overlay_policy['line_width'])
+
+                if overlay_policy['draw_labels']:
+                    label_xy = _resolve_label_position(polygon, bbox)
+                    draw.text(label_xy, class_name, fill=c_outline)
+
+    return image_overlay
+
+
+def _coerce_absolute_points(raw_points):
+    if not isinstance(raw_points, list):
+        return []
+
+    points = []
+    for point in raw_points:
+        if not isinstance(point, (list, tuple)) or len(point) < 2:
+            continue
+        try:
+            x = int(round(float(point[0])))
+            y = int(round(float(point[1])))
+        except (TypeError, ValueError):
+            continue
+        points.append((x, y))
+
+    return points
+
+
+def _resolve_label_position(polygon, bbox):
+    if polygon:
+        x, y = polygon[0]
+        return (x, max(0, y - 10))
+
+    if bbox:
+        x, y = bbox[0]
+        return (x, max(0, y - 10))
+
+    return (0, 0)
 
 def add_segmentations(image_overlay, Segmentation_Whole_Leaf, Segmentation_Partial_Leaf, show_segmentations, cfg):
     if show_segmentations:
@@ -810,6 +979,8 @@ def get_color(anno, a_type, cfg):
         alpha = cfg['leafmachine']['overlay']['alpha_transparency_seg_whole_leaf']
     elif a_type == 'SEG_PARTIAL':
         alpha = cfg['leafmachine']['overlay']['alpha_transparency_seg_partial_leaf']
+    elif a_type == 'SEG_PLANT_COMPONENT':
+        alpha = cfg['leafmachine']['overlay'].get('alpha_transparency_seg_plant_components', 0.35)
 
     if alpha is None:
         alpha = 0.5

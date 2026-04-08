@@ -124,6 +124,11 @@ def build_LM2_config():
         'show_archival_detections': True,
         'show_plant_detections': True,
         'show_segmentations': True,
+        'show_plant_component_segmentations': True,
+        'plant_component_segmentation_draw_order': 'after_leaf_masks',
+        'draw_plant_component_segmentation_polygon': True,
+        'draw_plant_component_segmentation_bbox': True,
+        'draw_plant_component_segmentation_labels': True,
         'show_landmarks': True,
         'ignore_archival_detections_classes': [],
         'ignore_plant_detections_classes': ['leaf_whole',], # Could also include 'leaf_partial' and others if needed
@@ -133,10 +138,12 @@ def build_LM2_config():
         'line_width_plant': 12, # Previous value given was 6
         'line_width_seg': 12, # 12 is specified as "thick"
         'line_width_efd': 12, # 3 is specified as "thick" but 12 is given here
+        'line_width_plant_component_segmentation': 2,
         'alpha_transparency_archival': 0.3,
         'alpha_transparency_plant': 0,
         'alpha_transparency_seg_whole_leaf': 0.4,
-        'alpha_transparency_seg_partial_leaf': 0.3
+        'alpha_transparency_seg_partial_leaf': 0.3,
+        'alpha_transparency_seg_plant_components': 0.35,
     }
 
     plant_component_detector_section = {
@@ -253,7 +260,10 @@ def build_LM2_config():
         'sam2_model_config': '',
         'sam2_checkpoint': '',
         'plantsam_checkpoint': '',
-        'segment_classes': list(range(11)),
+        'segment_classes': [2, 3, 4, 5, 6, 7, 8, 9, 10],
+        'segment_classes_include': [],
+        'segment_classes_exclude': [0, 1],
+        'specialization_fallback_to_base': True,
         'minimum_detection_confidence': 0.0,
         'minimum_bbox_size_px': 12,
         'save_mask_png': True,
