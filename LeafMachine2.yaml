@@ -68,12 +68,12 @@ leafmachine:
     upscale_factor: 10
     use_existing_landmark_detections: null
   leaf_segmentation:
-    calculate_elliptic_fourier_descriptors: true
+    calculate_elliptic_fourier_descriptors: false
     detector_version: uniform_spaced_oriented_traces_mid15_pet5_clean_640_flipidx_pt2
     elliptic_fourier_descriptor_order: 40
     find_minimum_bounding_box: true
     generate_overlay: true
-    keep_only_best_one_leaf_one_petiole: true
+    keep_only_best_one_leaf_one_petiole: false
     minimum_confidence_threshold: 0.7
     overlay_background_color: black
     overlay_dpi: 300
@@ -89,7 +89,7 @@ leafmachine:
     save_individual_leaves_white_background: true
     save_segmentation_overlay_images_to_pdf: false
     save_simple_txt: true
-    segment_partial_leaves: false
+    segment_partial_leaves: true
     segment_whole_leaves: true
     segmentation_model: Group3_Dataset_100000_Iter_1176PTS_512Batch_smooth_l1_LR00025_BGR
     use_efds_for_png_masks: false
@@ -113,16 +113,30 @@ leafmachine:
     - 0
     - 1
     specialization_fallback_to_base: true
-    minimum_detection_confidence: 0.0
-    minimum_bbox_size_px: 12
+    minimum_detection_confidence: 0.35
+    minimum_bbox_size_px: 20
+    enable_contained_box_dedup: true
+    dedup_within_class_only: true
+    bbox_padding_px: 2
+    bbox_padding_ratio: 0.01
+    max_bbox_area_ratio: 0.75
+    max_bbox_aspect_ratio: 12.0
+    mask_postprocess_enable: true
+    mask_cleanup_kernel_precision: 5
+    mask_cleanup_kernel_recall: 3
+    mask_min_component_area_ratio_precision: 0.01
+    mask_min_component_area_ratio_recall: 0.003
+    mask_fill_ratio_min: 0.003
+    mask_fill_ratio_max: 0.98
+    contour_simplify_epsilon_ratio: 0.003
     save_mask_png: true
     save_masked_rgb: true
     save_polygon_json: true
     save_overlay_images: true
     multimask_output: false
-    cuda_sdpa_mode: auto
+    cuda_sdpa_mode: math_only
     cuda_enable_cudnn_sdpa: false
-    device: cpu
+    device: cuda
   logging:
     log_level: null
     suppress_library_info_logs: true
@@ -170,13 +184,13 @@ leafmachine:
     verbose: true
   project:
     GBIF_mode: all
-    accept_only_ideal_leaves: true # Can be set to false to include leaves with some damage, but may result in more noisy data. If true, only leaves with no damage and no occlusions will be included.
+    accept_only_ideal_leaves: false # Can be set to false to include leaves with some damage, but may result in more noisy data. If true, only leaves with no damage and no occlusions will be included.
     batch_size: 50
     censor_archival_components: true
-    device: cpu
-    dir_images_local: C:\Users\User\Documents\Damian\Swinburne\all dataset\small high res
+    device: cuda
+    dir_images_local: D:\fyp_dataset\dipterocarpae
     dir_images_subset: ''
-    dir_output: C:\Users\User\Documents\Damian\Swinburne\all dataset\outputs\small high res
+    dir_output: D:\fyp_dataset\outputs\dipterocarpae
     hide_archival_components:
     - ruler
     - barcode

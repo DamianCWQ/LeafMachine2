@@ -42,6 +42,18 @@ def _is_cuda_kernel_compat_error(exc):
     ])
 
 
+def _probe_cuda_device(gpu_idx):
+    try:
+        with torch.no_grad():
+            x = torch.randn((64, 64), device=f'cuda:{gpu_idx}')
+            y = x @ x
+            _ = y.sum().item()
+        torch.cuda.synchronize(gpu_idx)
+        return True, None
+    except Exception as exc:
+        return False, exc
+
+
 def _resolve_segmentation_device_list(cfg, logger):
     requested_device = str(cfg['leafmachine']['project'].get('device', 'cpu')).lower()
     if requested_device != 'cuda':
@@ -64,25 +76,33 @@ def _resolve_segmentation_device_list(cfg, logger):
     except Exception:
         compiled_arches = set()
 
-    if not compiled_arches:
-        logger.warning('Unable to determine CUDA architecture compatibility for leaf segmentation. Falling back to CPU.')
-        return ['cpu']
-
     device_list = []
     unsupported_devices = []
+    arch_list_probe_devices = []
     for gpu_idx in range(num_to_use):
         try:
             major, minor = torch.cuda.get_device_capability(gpu_idx)
             arch = f'sm_{major}{minor}'
-            if arch in compiled_arches:
+
+            # Use a runtime probe to avoid false negatives from exact SM matching.
+            probe_ok, probe_exc = _probe_cuda_device(gpu_idx)
+            if probe_ok:
                 device_list.append(f'cuda:{gpu_idx}')
+                if compiled_arches and arch not in compiled_arches:
+                    gpu_name = torch.cuda.get_device_name(gpu_idx)
+                    arch_list_probe_devices.append(f'cuda:{gpu_idx} {gpu_name} ({arch})')
             else:
                 gpu_name = torch.cuda.get_device_name(gpu_idx)
-                unsupported_devices.append(f'cuda:{gpu_idx} {gpu_name} ({arch})')
+                unsupported_devices.append(f'cuda:{gpu_idx} {gpu_name} ({arch}) runtime probe failed: {probe_exc}')
         except Exception as e:
             unsupported_devices.append(f'cuda:{gpu_idx} ({e})')
 
     if device_list:
+        if arch_list_probe_devices:
+            logger.warning(
+                'Using CUDA devices for leaf segmentation that are not explicitly listed in '
+                f'torch.cuda.get_arch_list(), but passed runtime probe: {", ".join(arch_list_probe_devices)}'
+            )
         if unsupported_devices:
             logger.warning(
                 f"Skipping unsupported CUDA devices for leaf segmentation: {', '.join(unsupported_devices)}. "

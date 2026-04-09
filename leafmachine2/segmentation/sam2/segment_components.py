@@ -33,6 +33,9 @@ CLASS_ID_SOURCE_OF_TRUTH = {
     2: 'leaflet',
 }
 
+# Classes with thin/small morphology where we prefer recall-preserving cleanup.
+RECALL_BIASED_CLASS_IDS = {2, 7, 9}
+
 _SEGMENTER_CACHE = {}
 
 
@@ -70,6 +73,30 @@ def segment_plant_components(cfg, time_report, logger, dir_home, Project, batch,
     minimum_detection_confidence = float(seg_cfg.get('minimum_detection_confidence', 0.0))
     minimum_bbox_size_px = int(seg_cfg.get('minimum_bbox_size_px', 12))
     multimask_output = bool(seg_cfg.get('multimask_output', False))
+    enable_contained_box_dedup = bool(seg_cfg.get('enable_contained_box_dedup', True))
+    dedup_within_class_only = bool(seg_cfg.get('dedup_within_class_only', True))
+    bbox_padding_px = max(0, int(seg_cfg.get('bbox_padding_px', 2)))
+    bbox_padding_ratio = max(0.0, float(seg_cfg.get('bbox_padding_ratio', 0.01)))
+    max_bbox_area_ratio = min(1.0, max(0.0, float(seg_cfg.get('max_bbox_area_ratio', 0.75))))
+    max_bbox_aspect_ratio = max(1.0, float(seg_cfg.get('max_bbox_aspect_ratio', 12.0)))
+    mask_postprocess_enable = bool(seg_cfg.get('mask_postprocess_enable', True))
+    mask_cleanup_kernel_precision = int(seg_cfg.get('mask_cleanup_kernel_precision', 5))
+    mask_cleanup_kernel_recall = int(seg_cfg.get('mask_cleanup_kernel_recall', 3))
+    mask_min_component_area_ratio_precision = max(
+        0.0, float(seg_cfg.get('mask_min_component_area_ratio_precision', 0.01))
+    )
+    mask_min_component_area_ratio_recall = max(
+        0.0, float(seg_cfg.get('mask_min_component_area_ratio_recall', 0.003))
+    )
+    mask_fill_ratio_min = max(0.0, min(1.0, float(seg_cfg.get('mask_fill_ratio_min', 0.003))))
+    mask_fill_ratio_max = max(
+        mask_fill_ratio_min,
+        min(1.0, float(seg_cfg.get('mask_fill_ratio_max', 0.98))),
+    )
+    contour_simplify_epsilon_ratio = max(
+        0.0,
+        float(seg_cfg.get('contour_simplify_epsilon_ratio', 0.003)),
+    )
 
     save_mask_png = bool(seg_cfg.get('save_mask_png', True))
     save_masked_rgb = bool(seg_cfg.get('save_masked_rgb', True))
@@ -102,6 +129,7 @@ def segment_plant_components(cfg, time_report, logger, dir_home, Project, batch,
         image_rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
         image_h, image_w = image_rgb.shape[:2]
 
+        candidate_detections = []
         for det_idx, detection in enumerate(detections):
             batch_stats['detections_total'] += 1
             det = _coerce_detection(detection)
@@ -121,10 +149,45 @@ def segment_plant_components(cfg, time_report, logger, dir_home, Project, batch,
                 batch_stats['detections_filtered_out'] += 1
                 continue
 
-            bbox_xyxy = _normalized_xywh_to_xyxy(det[1:5], image_w, image_h, minimum_bbox_size_px)
+            bbox_xyxy = _normalized_xywh_to_xyxy(
+                det[1:5],
+                image_w,
+                image_h,
+                minimum_bbox_size_px,
+                bbox_padding_px=bbox_padding_px,
+                bbox_padding_ratio=bbox_padding_ratio,
+                max_bbox_area_ratio=max_bbox_area_ratio,
+                max_bbox_aspect_ratio=max_bbox_aspect_ratio,
+            )
             if bbox_xyxy is None:
                 batch_stats['detections_filtered_out'] += 1
                 continue
+
+            candidate_detections.append(
+                {
+                    'det_idx': det_idx,
+                    'class_id': class_id,
+                    'det_score': det_score,
+                    'bbox_xyxy': bbox_xyxy,
+                }
+            )
+
+        if enable_contained_box_dedup and candidate_detections:
+            deduped_candidates = _deduplicate_contained_candidates(
+                candidate_detections,
+                within_class_only=dedup_within_class_only,
+            )
+            batch_stats['detections_filtered_out'] += max(
+                0,
+                len(candidate_detections) - len(deduped_candidates),
+            )
+            candidate_detections = deduped_candidates
+
+        for candidate in candidate_detections:
+            det_idx = candidate['det_idx']
+            class_id = candidate['class_id']
+            det_score = candidate['det_score']
+            bbox_xyxy = candidate['bbox_xyxy']
 
             batch_stats['detections_attempted'] += 1
             try:
@@ -141,7 +204,25 @@ def segment_plant_components(cfg, time_report, logger, dir_home, Project, batch,
                 batch_stats['empty_masks'] += 1
                 continue
 
-            annotation_dict, contour = _build_annotation_from_mask(mask)
+            if mask_postprocess_enable:
+                mask = _postprocess_mask(
+                    mask,
+                    class_id,
+                    bbox_xyxy,
+                    mask_cleanup_kernel_precision,
+                    mask_cleanup_kernel_recall,
+                    mask_min_component_area_ratio_precision,
+                    mask_min_component_area_ratio_recall,
+                )
+
+            if _is_invalid_mask_fill_ratio(mask, bbox_xyxy, mask_fill_ratio_min, mask_fill_ratio_max):
+                batch_stats['empty_masks'] += 1
+                continue
+
+            annotation_dict, contour = _build_annotation_from_mask(
+                mask,
+                contour_simplify_epsilon_ratio=contour_simplify_epsilon_ratio,
+            )
             if annotation_dict is None:
                 batch_stats['empty_masks'] += 1
                 continue
@@ -866,7 +947,147 @@ def _coerce_detection(detection):
         return None
 
 
-def _normalized_xywh_to_xyxy(det_xywh, image_w, image_h, minimum_bbox_size_px):
+def _bbox_area(box_xyxy):
+    x1, y1, x2, y2 = box_xyxy
+    return max(0, x2 - x1) * max(0, y2 - y1)
+
+
+def _is_contained_within(inner_box_xyxy, outer_box_xyxy):
+    return (
+        inner_box_xyxy[0] >= outer_box_xyxy[0]
+        and inner_box_xyxy[1] >= outer_box_xyxy[1]
+        and inner_box_xyxy[2] <= outer_box_xyxy[2]
+        and inner_box_xyxy[3] <= outer_box_xyxy[3]
+    )
+
+
+def _deduplicate_contained_candidates(candidates, within_class_only=True):
+    if len(candidates) <= 1:
+        return candidates
+
+    sorted_candidates = sorted(
+        candidates,
+        key=lambda item: (
+            -_bbox_area(item['bbox_xyxy']),
+            -(item['det_score'] if item['det_score'] is not None else -1.0),
+            item['det_idx'],
+        ),
+    )
+
+    kept = []
+    for candidate in sorted_candidates:
+        is_contained = any(
+            (
+                (not within_class_only or candidate['class_id'] == existing['class_id'])
+                and _is_contained_within(candidate['bbox_xyxy'], existing['bbox_xyxy'])
+            )
+            for existing in kept
+        )
+        if not is_contained:
+            kept.append(candidate)
+
+    return sorted(kept, key=lambda item: item['det_idx'])
+
+
+def _odd_kernel_size(size):
+    size = max(1, int(size))
+    if size % 2 == 0:
+        size += 1
+    return size
+
+
+def _remove_small_components(mask_u8, minimum_component_area_px):
+    if minimum_component_area_px <= 1:
+        return mask_u8
+
+    num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(mask_u8, connectivity=8)
+    if num_labels <= 1:
+        return mask_u8
+
+    cleaned = np.zeros_like(mask_u8)
+    for label_idx in range(1, num_labels):
+        if stats[label_idx, cv2.CC_STAT_AREA] >= minimum_component_area_px:
+            cleaned[labels == label_idx] = 1
+
+    if np.any(cleaned):
+        return cleaned
+
+    largest_label_idx = 1 + int(np.argmax(stats[1:, cv2.CC_STAT_AREA]))
+    cleaned[labels == largest_label_idx] = 1
+    return cleaned
+
+
+def _postprocess_mask(
+    mask,
+    class_id,
+    bbox_xyxy,
+    mask_cleanup_kernel_precision,
+    mask_cleanup_kernel_recall,
+    mask_min_component_area_ratio_precision,
+    mask_min_component_area_ratio_recall,
+):
+    mask_u8 = mask.astype(np.uint8)
+    if mask_u8.size == 0:
+        return mask.astype(bool)
+
+    is_recall_biased_class = class_id in RECALL_BIASED_CLASS_IDS
+    kernel_size = _odd_kernel_size(
+        mask_cleanup_kernel_recall if is_recall_biased_class else mask_cleanup_kernel_precision
+    )
+
+    if kernel_size > 1:
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kernel_size, kernel_size))
+        mask_u8 = cv2.morphologyEx(mask_u8, cv2.MORPH_CLOSE, kernel, iterations=1)
+
+        # Keep thin structures in recall-biased classes by skipping the opening pass.
+        if not is_recall_biased_class and kernel_size >= 3:
+            opening_kernel_size = _odd_kernel_size(max(3, kernel_size - 2))
+            opening_kernel = cv2.getStructuringElement(
+                cv2.MORPH_ELLIPSE,
+                (opening_kernel_size, opening_kernel_size),
+            )
+            mask_u8 = cv2.morphologyEx(mask_u8, cv2.MORPH_OPEN, opening_kernel, iterations=1)
+
+    x1, y1, x2, y2 = bbox_xyxy
+    bbox_area = max(1, (x2 - x1) * (y2 - y1))
+    minimum_component_area_px = max(
+        1,
+        int(
+            round(
+                bbox_area
+                * (
+                    mask_min_component_area_ratio_recall
+                    if is_recall_biased_class
+                    else mask_min_component_area_ratio_precision
+                )
+            )
+        ),
+    )
+
+    mask_u8 = _remove_small_components(mask_u8, minimum_component_area_px)
+    return mask_u8.astype(bool)
+
+
+def _is_invalid_mask_fill_ratio(mask, bbox_xyxy, min_fill_ratio, max_fill_ratio):
+    x1, y1, x2, y2 = bbox_xyxy
+    mask_crop = mask[y1:y2, x1:x2]
+    if mask_crop.size == 0:
+        return True
+
+    fill_ratio = float(np.count_nonzero(mask_crop)) / float(mask_crop.size)
+    return fill_ratio < min_fill_ratio or fill_ratio > max_fill_ratio
+
+
+def _normalized_xywh_to_xyxy(
+    det_xywh,
+    image_w,
+    image_h,
+    minimum_bbox_size_px,
+    bbox_padding_px=0,
+    bbox_padding_ratio=0.0,
+    max_bbox_area_ratio=1.0,
+    max_bbox_aspect_ratio=12.0,
+):
     x_center, y_center, box_w, box_h = det_xywh
 
     x1 = int(round((x_center - (box_w / 2.0)) * image_w))
@@ -874,12 +1095,32 @@ def _normalized_xywh_to_xyxy(det_xywh, image_w, image_h, minimum_bbox_size_px):
     x2 = int(round((x_center + (box_w / 2.0)) * image_w))
     y2 = int(round((y_center + (box_h / 2.0)) * image_h))
 
+    raw_bbox_w = max(1, x2 - x1)
+    raw_bbox_h = max(1, y2 - y1)
+    padding = int(round(max(float(bbox_padding_px), max(raw_bbox_w, raw_bbox_h) * float(bbox_padding_ratio))))
+    if padding > 0:
+        x1 -= padding
+        y1 -= padding
+        x2 += padding
+        y2 += padding
+
     x1 = max(0, min(image_w - 1, x1))
     y1 = max(0, min(image_h - 1, y1))
     x2 = max(1, min(image_w, x2))
     y2 = max(1, min(image_h, y2))
 
-    if (x2 - x1) < minimum_bbox_size_px or (y2 - y1) < minimum_bbox_size_px:
+    bbox_w = x2 - x1
+    bbox_h = y2 - y1
+    if bbox_w < minimum_bbox_size_px or bbox_h < minimum_bbox_size_px:
+        return None
+
+    bbox_area = bbox_w * bbox_h
+    image_area = max(1, image_w * image_h)
+    if max_bbox_area_ratio < 1.0 and bbox_area > (max_bbox_area_ratio * image_area):
+        return None
+
+    aspect_ratio = max(float(bbox_w) / float(max(1, bbox_h)), float(bbox_h) / float(max(1, bbox_w)))
+    if aspect_ratio > max_bbox_aspect_ratio:
         return None
 
     return [x1, y1, x2, y2]
@@ -890,7 +1131,7 @@ def _build_component_name(filename, class_name, bbox_xyxy):
     return f'{filename}__{class_name.upper()}__{x1}-{y1}-{x2}-{y2}'
 
 
-def _build_annotation_from_mask(mask):
+def _build_annotation_from_mask(mask, contour_simplify_epsilon_ratio=0.0):
     mask_u8 = (mask.astype(np.uint8) * 255)
     contours, _ = cv2.findContours(mask_u8, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
@@ -900,6 +1141,12 @@ def _build_annotation_from_mask(mask):
     contour = max(contours, key=cv2.contourArea)
     if contour is None or len(contour) < 3:
         return None, None
+
+    if contour_simplify_epsilon_ratio > 0.0:
+        epsilon = contour_simplify_epsilon_ratio * cv2.arcLength(contour, True)
+        simplified_contour = cv2.approxPolyDP(contour, epsilon, True)
+        if simplified_contour is not None and len(simplified_contour) >= 3:
+            contour = simplified_contour
 
     area = float(cv2.contourArea(contour))
     if area <= 0:
