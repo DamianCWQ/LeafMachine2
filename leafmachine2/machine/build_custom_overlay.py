@@ -343,10 +343,13 @@ def add_landmarks(image_overlay, Landmarks_Whole_Leaves, Landmarks_Partial_Leave
                 for seg_name, overlay_data in object.items():
                     seg_name_short = seg_name.split("__")[-1]
                     for part in overlay_data:
-                        key, overlay_data_insert = next(iter(overlay_data[0].items()))   
-                        overlay_poly = overlay_data_insert['polygon_closed']
-                        overlay_rect = overlay_data_insert['bbox_min']
-                        overlay_efd = overlay_data_insert['efds']['efd_pts_PIL']
+                        key, overlay_data_insert = _extract_segmentation_payload(part)
+                        if not overlay_data_insert:
+                            continue
+                        overlay_poly = overlay_data_insert.get('polygon_closed', [])
+                        overlay_rect = overlay_data_insert.get('bbox_min', [])
+                        efds = overlay_data_insert.get('efds', {})
+                        overlay_efd = efds.get('efd_pts_PIL') if isinstance(efds, dict) else None
 
                         if 'leaf' in key:
                             c_outline, c_fill = get_color('seg_leaf_partial', 'SEG_PARTIAL', cfg)
@@ -493,6 +496,33 @@ def _resolve_label_position(polygon, bbox):
 
     return (0, 0)
 
+
+def _extract_segmentation_payload(part):
+    """Return (label_key, payload_dict) from varying segmentation part formats."""
+    if not isinstance(part, dict) or not part:
+        return None, None
+
+    key, payload = next(iter(part.items()))
+
+    # Expected format: {label: {...props...}}
+    if isinstance(payload, dict):
+        return key, payload
+
+    # Variant format: {label: [ {...props...} ]} or nested dict wrappers.
+    if isinstance(payload, list):
+        for item in payload:
+            if not isinstance(item, dict) or not item:
+                continue
+
+            if ('polygon_closed' in item) or ('bbox_min' in item) or ('efds' in item):
+                return key, item
+
+            nested_key, nested_payload = next(iter(item.items()))
+            if isinstance(nested_payload, dict):
+                return nested_key, nested_payload
+
+    return key, None
+
 def add_segmentations(image_overlay, Segmentation_Whole_Leaf, Segmentation_Partial_Leaf, show_segmentations, cfg):
     if show_segmentations:
         if cfg['leafmachine']['leaf_segmentation']['segment_whole_leaves']:
@@ -501,11 +531,18 @@ def add_segmentations(image_overlay, Segmentation_Whole_Leaf, Segmentation_Parti
                 for seg_name, overlay_data in object.items():
                     seg_name_short = seg_name.split("__")[-1]
                     for part in overlay_data:
-                        key, overlay_data_insert = next(iter(part.items()))   
-                        overlay_poly = overlay_data_insert['polygon_closed']
-                        overlay_rect = overlay_data_insert['bbox_min']
+                        key, overlay_data_insert = _extract_segmentation_payload(part)
+                        if not overlay_data_insert:
+                            continue
+
+                        overlay_poly = overlay_data_insert.get('polygon_closed', [])
+                        overlay_rect = overlay_data_insert.get('bbox_min', [])
                         if cfg['leafmachine']['leaf_segmentation']['calculate_elliptic_fourier_descriptors']:
-                            overlay_efd = overlay_data_insert['efds']['efd_pts_PIL']
+                            efds = overlay_data_insert.get('efds', {})
+                            if isinstance(efds, dict):
+                                overlay_efd = efds.get('efd_pts_PIL')
+                            else:
+                                overlay_efd = None
                         else:
                             overlay_efd = None
 
@@ -527,10 +564,20 @@ def add_segmentations(image_overlay, Segmentation_Whole_Leaf, Segmentation_Parti
                 for seg_name, overlay_data in object.items():
                     seg_name_short = seg_name.split("__")[-1]
                     for part in overlay_data:
-                        key, overlay_data_insert = next(iter(overlay_data[0].items()))   
-                        overlay_poly = overlay_data_insert['polygon_closed']
-                        overlay_rect = overlay_data_insert['bbox_min']
-                        overlay_efd = overlay_data_insert['efds']['efd_pts_PIL']
+                        key, overlay_data_insert = _extract_segmentation_payload(part)
+                        if not overlay_data_insert:
+                            continue
+
+                        overlay_poly = overlay_data_insert.get('polygon_closed', [])
+                        overlay_rect = overlay_data_insert.get('bbox_min', [])
+                        if cfg['leafmachine']['leaf_segmentation']['calculate_elliptic_fourier_descriptors']:
+                            efds = overlay_data_insert.get('efds', {})
+                            if isinstance(efds, dict):
+                                overlay_efd = efds.get('efd_pts_PIL')
+                            else:
+                                overlay_efd = None
+                        else:
+                            overlay_efd = None
 
                         if 'leaf' in key:
                             c_outline, c_fill = get_color('seg_leaf_partial', 'SEG_PARTIAL', cfg)
