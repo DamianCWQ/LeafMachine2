@@ -43,9 +43,9 @@ leafmachine:
     detector_type: Landmark_Detector_YOLO
     detector_version: Landmarks
     detector_weights: best.pt
-    do_save_QC_images: true
-    do_save_final_images: true
-    do_save_prediction_overlay_images: true
+    do_save_QC_images: false # set true to save images with detected landmarks drawn on them for quality control purposes. These images will be saved in a separate folder and can be used to visually inspect the performance of the landmark detector.
+    do_save_final_images: false # set true to save images with final landmark detections drawn on them. These images will be saved in a separate folder and can be used for visual inspection of the final landmark detections after any post-processing steps.
+    do_save_prediction_overlay_images: false # set true to save images with the predicted landmarks overlaid on the original image. These images will be saved in a separate folder and can be used to visually inspect the performance of the landmark detector and the quality of the predictions.
     do_show_QC_images: false
     do_show_final_images: false
     ignore_objects_for_overlay: []
@@ -58,9 +58,9 @@ leafmachine:
     detector_type: Landmark_Detector_YOLO
     detector_version: Landmarks_Arm_A_200
     detector_weights: last.pt
-    do_save_QC_images: true
-    do_save_final_images: true
-    do_save_prediction_overlay_images: true
+    do_save_QC_images: false # set true to save images with detected landmarks drawn on them for quality control purposes. These images will be saved in a separate folder and can be used to visually inspect the performance of the landmark detector.
+    do_save_final_images: false # set true to save images with final landmark detections drawn on them. These images will be saved in a separate folder and can be used for visual inspection of the final landmark detections after any post-processing steps.
+    do_save_prediction_overlay_images: false # set true to save images with the predicted landmarks overlaid on the original image. These images will be saved in a separate folder and can be used to visually inspect the performance of the landmark detector and the quality of the predictions.
     do_show_QC_images: true
     do_show_final_images: true
     ignore_objects_for_overlay: []
@@ -81,14 +81,14 @@ leafmachine:
     save_each_segmentation_overlay_image: true
     save_full_image_masks_color: true
     save_individual_overlay_images: true
-    save_keypoint_overlay: true
+    save_keypoint_overlay: false # Keypoints overlay
     save_masks_color: true
-    save_oriented_images: true
-    save_oriented_mask: true
+    save_oriented_images: false # Keypoints are currently not oriented, so this is set to false. If true, the leaf will be rotated to a standard orientation based on the keypoints before being saved.
+    save_oriented_mask: false # Keypoints mask
     save_rgb_cropped_images: true
     save_individual_leaves_white_background: true
     save_segmentation_overlay_images_to_pdf: false
-    save_simple_txt: true
+    save_simple_txt: false # Saves keypoints labels
     segment_partial_leaves: true
     segment_whole_leaves: true
     segmentation_model: Group3_Dataset_100000_Iter_1176PTS_512Batch_smooth_l1_LR00025_BGR
@@ -129,10 +129,10 @@ leafmachine:
     mask_fill_ratio_min: 0.003
     mask_fill_ratio_max: 0.98
     contour_simplify_epsilon_ratio: 0.003
-    save_mask_png: true
+    save_mask_png: false
     save_masked_rgb: true
     save_polygon_json: true
-    save_overlay_images: true
+    save_overlay_images: false
     multimask_output: false
     cuda_sdpa_mode: math_only
     cuda_enable_cudnn_sdpa: false

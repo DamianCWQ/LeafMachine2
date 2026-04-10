@@ -32,6 +32,9 @@ from leafmachine2.component_detector.component_detector import unpack_class_from
 from leafmachine2.segmentation.detectron2.segment_utils import get_largest_polygon, keep_rows, get_string_indices
 
 
+_ARCH_LIST_COMPAT_NOTE_LOGGED = False
+
+
 def _is_cuda_kernel_compat_error(exc):
     msg = str(exc).lower()
     return any(err in msg for err in [
@@ -55,6 +58,8 @@ def _probe_cuda_device(gpu_idx):
 
 
 def _resolve_segmentation_device_list(cfg, logger):
+    global _ARCH_LIST_COMPAT_NOTE_LOGGED
+
     requested_device = str(cfg['leafmachine']['project'].get('device', 'cpu')).lower()
     if requested_device != 'cuda':
         return ['cpu']
@@ -99,10 +104,12 @@ def _resolve_segmentation_device_list(cfg, logger):
 
     if device_list:
         if arch_list_probe_devices:
-            logger.warning(
-                'Using CUDA devices for leaf segmentation that are not explicitly listed in '
-                f'torch.cuda.get_arch_list(), but passed runtime probe: {", ".join(arch_list_probe_devices)}'
-            )
+            if not _ARCH_LIST_COMPAT_NOTE_LOGGED:
+                logger.info(
+                    'CUDA compatibility note for leaf segmentation: device(s) not explicitly listed in '
+                    f'torch.cuda.get_arch_list() passed runtime probe and will be used: {", ".join(arch_list_probe_devices)}'
+                )
+                _ARCH_LIST_COMPAT_NOTE_LOGGED = True
         if unsupported_devices:
             logger.warning(
                 f"Skipping unsupported CUDA devices for leaf segmentation: {', '.join(unsupported_devices)}. "
@@ -546,9 +553,15 @@ def save_individual_leaf_white_background(use_polys, overlay_color, img_cropped,
 ##### For mask saving
 def rotate_mask_using_keypoint_data(dir_out, seg_name, save_oriented_images, keypoint_data, img):
     # Handle rotation 
-    img_cv2 = cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR)
     angle = keypoint_data[seg_name]['angle']
+    img_np = np.array(img)
+    if img_np is None or not isinstance(img_np, np.ndarray) or img_np.size == 0:
+        return img_np, -angle
+
+    img_cv2 = cv2.cvtColor(img_np, cv2.COLOR_RGB2BGR)
     oriented_mask = rotate_image(-angle, img_cv2, save_oriented_images)
+    if oriented_mask is None or oriented_mask.size == 0:
+        oriented_mask = img_cv2
     ### oriented_mask = Image.fromarray(cv2.cvtColor(oriented_mask, cv2.COLOR_BGR2RGB))
     ### oriented_mask.save(os.path.join(dir_out, '.'.join([seg_name, 'png'])))
     
@@ -561,6 +574,8 @@ def rotate_mask_using_keypoint_data(dir_out, seg_name, save_oriented_images, key
     color_petiole = (255, 173, 0)
     
     def find_centroid(color, img):
+        if img is None or not isinstance(img, np.ndarray) or img.size == 0:
+            return None
         mask = cv2.inRange(img, np.array(color), np.array(color))
         moments = cv2.moments(mask)
         if moments["m00"] != 0:
@@ -578,7 +593,10 @@ def rotate_mask_using_keypoint_data(dir_out, seg_name, save_oriented_images, key
         angle = 180 - angle
 
     # Save the oriented mask
-    cv2.imwrite(os.path.join(dir_out, '.'.join([seg_name, 'png'])), oriented_mask)
+    if oriented_mask is not None and isinstance(oriented_mask, np.ndarray) and oriented_mask.size > 0:
+        if dir_out:
+            os.makedirs(dir_out, exist_ok=True)
+        cv2.imwrite(os.path.join(dir_out, '.'.join([seg_name, 'png'])), oriented_mask)
 
     return oriented_mask, -angle
 
@@ -869,6 +887,9 @@ def save_simple_txt(dir_simple_txt, rotated_contour, top, bottom, closest_tip_po
                     full_size, CF, max_extent, x_min, y_min):
     # Construct the full path for the txt file
     file_path = os.path.join(dir_simple_txt, '.'.join([filename, 'txt']))
+    parent_dir = os.path.dirname(file_path)
+    if parent_dir:
+        os.makedirs(parent_dir, exist_ok=True)
     
     # Open the file in write mode
     with open(file_path, 'w') as file:
@@ -901,6 +922,9 @@ def save_simple_txt(dir_simple_txt, rotated_contour, top, bottom, closest_tip_po
 def save_raw_contour_txt(dir_raw_txt, raw_contour, seg_name, full_size, CF, angle):
     # Construct the full path for the raw txt file
     file_path = os.path.join(dir_raw_txt, f'{seg_name}.txt')
+    parent_dir = os.path.dirname(file_path)
+    if parent_dir:
+        os.makedirs(parent_dir, exist_ok=True)
     bbox_str = seg_name.split('__L__')[-1].split('.')[0]
     bbox = tuple(map(int, bbox_str.split('-')))
     
@@ -1006,7 +1030,7 @@ def save_masks_color(keypoint_data, save_oriented_images, save_individual_masks_
                     unique_colors = find_unique_colors(oriented_mask)
                     mask_leaf, masks, has_leaf_color = segment_masks(unique_colors, oriented_mask)
                     if has_leaf_color:
-                        raw_contour, rotated_contour, max_extent, x_min, y_min, top, bottom = create_perimeter_normalize(mask_leaf, keypoint_data, seg_name)
+                        raw_contour, rotated_contour, max_extent, x_min, y_min, top, bottom, closest_tip_point, closest_base_point = create_perimeter_normalize(mask_leaf, keypoint_data, seg_name)
                         save_simple_txt(Dirs.dir_simple_txt, rotated_contour, top, bottom, closest_tip_point, closest_base_point, angle, seg_name, full_size, CF, max_extent, x_min, y_min)
                         save_raw_contour_txt(Dirs.dir_simple_raw_txt, raw_contour, seg_name, full_size, CF, angle)
 
@@ -1203,29 +1227,34 @@ def rotate_polygon_around_image_center(points, angle_degrees, img_width, img_hei
 
 
 def rotate_image(angle, orig_img, save_oriented_images):
-    if save_oriented_images:
-        # Calculate the center of the image and the image size
-        image_center = tuple(np.array(orig_img.shape[1::-1]) / 2)
-        height, width = orig_img.shape[:2]
+    if orig_img is None or not isinstance(orig_img, np.ndarray) or orig_img.size == 0:
+        return orig_img
 
-        # Calculate the rotation matrix for the given angle
-        rot_mat = cv2.getRotationMatrix2D(image_center, angle, 1.0)
+    # Rotation output is required downstream even when files are not written.
+    _ = save_oriented_images
 
-        # Calculate the sine and cosine of the rotation angle
-        abs_cos = abs(rot_mat[0, 0])
-        abs_sin = abs(rot_mat[0, 1])
+    # Calculate the center of the image and the image size
+    image_center = tuple(np.array(orig_img.shape[1::-1]) / 2)
+    height, width = orig_img.shape[:2]
 
-        # Calculate the new bounding dimensions of the image
-        bound_w = int(height * abs_sin + width * abs_cos)
-        bound_h = int(height * abs_cos + width * abs_sin)
+    # Calculate the rotation matrix for the given angle
+    rot_mat = cv2.getRotationMatrix2D(image_center, angle, 1.0)
 
-        # Adjust the rotation matrix to take into account translation
-        rot_mat[0, 2] += bound_w / 2 - image_center[0]
-        rot_mat[1, 2] += bound_h / 2 - image_center[1]
+    # Calculate the sine and cosine of the rotation angle
+    abs_cos = abs(rot_mat[0, 0])
+    abs_sin = abs(rot_mat[0, 1])
 
-        # Perform the rotation, adjusting the canvas size
-        rotated_img = cv2.warpAffine(orig_img, rot_mat, (bound_w, bound_h), flags=cv2.INTER_NEAREST, borderMode=cv2.BORDER_CONSTANT)
-        return rotated_img
+    # Calculate the new bounding dimensions of the image
+    bound_w = int(height * abs_sin + width * abs_cos)
+    bound_h = int(height * abs_cos + width * abs_sin)
+
+    # Adjust the rotation matrix to take into account translation
+    rot_mat[0, 2] += bound_w / 2 - image_center[0]
+    rot_mat[1, 2] += bound_h / 2 - image_center[1]
+
+    # Perform the rotation, adjusting the canvas size
+    rotated_img = cv2.warpAffine(orig_img, rot_mat, (bound_w, bound_h), flags=cv2.INTER_NEAREST, borderMode=cv2.BORDER_CONSTANT)
+    return rotated_img
 
 
 def create_image_from_coords(coords, filename='output_image.png'):
