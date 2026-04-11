@@ -188,9 +188,9 @@ leafmachine:
     batch_size: 50
     censor_archival_components: true
     device: cuda
-    dir_images_local: D:\fyp_dataset\dipterocarpae
+    dir_images_local: D:\fyp_dataset\dipterocarpae small
     dir_images_subset: ''
-    dir_output: D:\fyp_dataset\outputs\dipterocarpae
+    dir_output: D:\fyp_dataset\outputs\dipterocarpae small
     hide_archival_components:
     - ruler
     - barcode

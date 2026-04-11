@@ -517,11 +517,9 @@ class PosePredictor(DetectionPredictor):
             elif key == pattern:
                 return color, size, pt_type
         return (255, 255, 255), 5, 0
-            
-    def calc_angle(self, keypoints, img_rgb):
-        do_width = False
-        
-        keypoint_measurements = {
+
+    def _default_keypoint_measurements(self):
+        return {
             'distance_lamina': 0,
             'distance_width': 0,
             'distance_petiole': 0,
@@ -534,6 +532,17 @@ class PosePredictor(DetectionPredictor):
             'base_angle': 0,
             'base_is_reflex': False,
         }
+            
+    def calc_angle(self, keypoints, img_rgb):
+        do_width = False
+        keypoint_measurements = self._default_keypoint_measurements()
+
+        required_keypoints = len(self.mapping)
+        if not isinstance(keypoints, np.ndarray):
+            return 0.0, None, None, keypoint_measurements
+        if keypoints.ndim != 2 or keypoints.shape[0] < required_keypoints or keypoints.shape[1] < 2:
+            return 0.0, None, None, keypoint_measurements
+
         # Extract the coordinates of points 0 and 22
         lamina_tip = keypoints[0]
         apex_left = keypoints[1]
@@ -589,8 +598,12 @@ class PosePredictor(DetectionPredictor):
             mag1 = np.linalg.norm(vector1)
             mag2 = np.linalg.norm(vector2)
 
+            if mag1 == 0 or mag2 == 0:
+                return 0.0, False
+
             # Calculate angle in radians and then convert to degrees
-            angle_rad = np.arccos(dot_prod / (mag1 * mag2))
+            cos_theta = np.clip(dot_prod / (mag1 * mag2), -1.0, 1.0)
+            angle_rad = np.arccos(cos_theta)
             angle_deg = np.degrees(angle_rad)
 
             # Determine if it is a reflex angle
@@ -649,12 +662,16 @@ class PosePredictor(DetectionPredictor):
     
     def visualize_keypoints(self, img, keypoints, file_key):
         file_key = file_key + '.jpg'
+        if not isinstance(keypoints, np.ndarray) or keypoints.ndim != 2 or keypoints.shape[0] == 0:
+            return
         if self.save_keypoint_overlay:
             # Convert NumPy array (img) to a PIL Image
             pil_img = Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
             draw = ImageDraw.Draw(pil_img)
 
             for key, idx in self.mapping.items():
+                if idx >= keypoints.shape[0]:
+                    continue
                 point = keypoints[idx]
                 color, size, pt_type = self.get_color_for_keypoint(key)
                 # Draw circle in PIL: create an ellipse inside bounding box [(x1, y1), (x2, y2)]
@@ -695,20 +712,17 @@ class PosePredictor(DetectionPredictor):
 
         results = {
             'img_name': None, 
-            'keypoints' :None, 
-            'angle': None,
+            'keypoints': np.empty((0, 2), dtype=np.float32), 
+            'angle': 0.0,
             'img_path': None,
             'tip': None,
             'base': None,
+            'keypoint_measurements': self._default_keypoint_measurements(),
             }
         
         for i, pred in enumerate(preds):
             
             orig_img = orig_imgs[i]
-            pred[:, :4] = ops.scale_boxes(img.shape[2:], pred[:, :4], orig_img.shape).round()
-            pred_kpts = pred[:, 6:].view(len(pred), *self.model.kpt_shape) if len(pred) else pred[:, 6:]
-            pred_kpts = ops.scale_coords(img.shape[2:], pred_kpts, orig_img.shape)
-            
             if self.filename is None:
                 img_path = self.batch[0][i]
                 file_key = os.path.splitext(os.path.basename(img_path))[0]
@@ -716,12 +730,30 @@ class PosePredictor(DetectionPredictor):
                 img_path = None
                 file_key = self.filename
 
+            results['img_name'] = file_key
+            results['img_path'] = img_path
+
+            if len(pred) == 0:
+                continue
+
+            pred[:, :4] = ops.scale_boxes(img.shape[2:], pred[:, :4], orig_img.shape).round()
+            pred_kpts = pred[:, 6:].view(len(pred), *self.model.kpt_shape) if len(pred) else pred[:, 6:]
+            pred_kpts = ops.scale_coords(img.shape[2:], pred_kpts, orig_img.shape)
+
             res = Results(orig_img, path=img_path, names=self.model.names, boxes=pred[:, :6], keypoints=pred_kpts)
-            pred_kpts_np = res.keypoints.xy.cpu().numpy()[0]
+            kpts_xy = res.keypoints.xy
+            if kpts_xy is None or kpts_xy.numel() == 0:
+                continue
+
+            pred_kpts_all = kpts_xy.cpu().numpy()
+            if pred_kpts_all.size == 0:
+                continue
+            pred_kpts_np = pred_kpts_all[0]
 
             angle, tip, base, keypoint_measurements = self.calc_angle(pred_kpts_np, img_rgb)
 
-            self.rotate_image(-angle, orig_img, file_key)
+            if tip is not None and base is not None:
+                self.rotate_image(-angle, orig_img, file_key)
 
             self.visualize_keypoints(orig_img, pred_kpts_np, file_key)
 

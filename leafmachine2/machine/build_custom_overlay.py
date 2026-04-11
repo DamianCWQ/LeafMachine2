@@ -145,26 +145,24 @@ def process_file(Project, filename, analysis, line_w_archival, show_archival, ig
     if image_overlay.mode != 'RGB':
         image_overlay = image_overlay.convert('RGB')
 
-    with lock:
+    image_overlay = add_archival_detections(image_overlay, archival, height, width, line_w_archival, show_archival, ignore_archival, cfg)
 
-        image_overlay = add_archival_detections(image_overlay, archival, height, width, line_w_archival, show_archival, ignore_archival, cfg)
+    image_overlay = add_plant_detections(image_overlay, plant, height, width, line_w_plant, show_plant, ignore_plant, cfg)
 
-        image_overlay = add_plant_detections(image_overlay, plant, height, width, line_w_plant, show_plant, ignore_plant, cfg)
+    image_overlay = add_segmentations_with_plant_components(
+        image_overlay,
+        Segmentation_Whole_Leaf,
+        Segmentation_Partial_Leaf,
+        Segmentation_Plant_Components,
+        show_segmentations,
+        cfg,
+    )
 
-        image_overlay = add_segmentations_with_plant_components(
-            image_overlay,
-            Segmentation_Whole_Leaf,
-            Segmentation_Partial_Leaf,
-            Segmentation_Plant_Components,
-            show_segmentations,
-            cfg,
-        )
+    image_overlay = add_landmarks(image_overlay, Landmarks_Whole_Leaves, Landmarks_Partial_Leaves, show_landmarks, cfg)
 
-        image_overlay = add_landmarks(image_overlay, Landmarks_Whole_Leaves, Landmarks_Partial_Leaves, show_landmarks, cfg)
+    ruler_img = get_ruler_images(Ruler_Images, cfg)
 
-        ruler_img = get_ruler_images(Ruler_Images, cfg)
-
-        save_overlay_images_to_jpg(image_overlay, filename, Dirs, cfg)
+    save_overlay_images_to_jpg(image_overlay, filename, Dirs, cfg)
 
     return filename, image_overlay, ruler_img
 

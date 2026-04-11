@@ -408,71 +408,47 @@ def segment_images(logger, dir_home, dict_objects, leaf_type, dict_name_seg, dic
         if value[dict_from] is not []:
             for cropped in value[dict_from]: # Individual leaf
                 for seg_name, img_cropped in cropped.items():
-                    with lock:
-                    
-                        keypoint_data = {}
-                        # print(seg_name)
-                        logger.debug(f'segmenting - {seg_name}')
+                    keypoint_data = {}
+                    logger.debug(f'segmenting - {seg_name}')
 
-                        seg_name_short = seg_name.split("__")[2]
-                        # cropped_overlay = []
+                    seg_name_short = seg_name.split("__")[2]
 
+                    # Segment!
+                    out_polygons, out_bboxes, out_labels, out_color = Instance_Detector.segment(img_cropped, generate_overlay, overlay_dpi, bg_color)
+                    keypoint_data = Pose_Predictor.process_images(img_cropped, filename=seg_name)
 
-                        # Segment!
-                        # fig, out_polygons, out_bboxes, out_labels, out_color = Instance_Detector.segment(img_cropped, generate_overlay, overlay_dpi, bg_color)
-                        # try:
-                        out_polygons, out_bboxes, out_labels, out_color = Instance_Detector.segment(img_cropped, generate_overlay, overlay_dpi, bg_color)
-                        keypoint_data = Pose_Predictor.process_images(img_cropped, filename=seg_name)
-                        # print(keypoint_data)
-
-                        # except:
-                        #     detected_components = []
-                        #     cropped_overlay = []
-                        #     overlay_data = []
-                        #     cropped_overlay_size = []
-                        #     out_polygons = []
-                        #     keypoint_data = []
+                    if len(out_polygons) > 0: # Success
+                        if keep_best:
+                            out_polygons, out_bboxes, out_labels, out_color = keep_rows(out_polygons, out_bboxes, out_labels, out_color, get_string_indices(out_labels))
                         
-                        if len(out_polygons) > 0: # Success
-                            if keep_best:
-                                out_polygons, out_bboxes, out_labels, out_color = keep_rows(out_polygons, out_bboxes, out_labels, out_color, get_string_indices(out_labels))
-                            
-                            if (out_polygons is None) and (out_bboxes is None) and (out_labels is None) and (out_color is None):
-                                detected_components = []
-                                cropped_overlay = []
-                                overlay_data = []
-                                cropped_overlay_size = []
-                            else:
-                                # detected_components, cropped_overlay, cropped_overlay_oriented, overlay_data, new_width, new_height = create_overlay_and_calculate_props(keypoint_data, seg_name, img_cropped, out_polygons, out_labels, out_color, cfg)
-                                detected_components, cropped_overlay, overlay_data = create_overlay_and_calculate_props(keypoint_data, seg_name, img_cropped, out_polygons, out_labels, out_color, cfg)
-                                # full_image = create_insert_legacy(full_image, cropped_overlay, seg_name_short)
-                                full_image = create_insert(full_image, overlay_data, seg_name_short, cfg)
-
-                                cropped_overlay_size = cropped_overlay.shape
-                                # cropped_overlay_oriented_size = cropped_overlay_oriented.shape
-                                # cropped_overlay_oriented_size = (new_width, new_height)
-
-                        else: # Fail
+                        if (out_polygons is None) and (out_bboxes is None) and (out_labels is None) and (out_color is None):
                             detected_components = []
                             cropped_overlay = []
                             overlay_data = []
                             cropped_overlay_size = []
-                            keypoint_data = []
-                            # cropped_overlay_oriented_size = []
+                        else:
+                            detected_components, cropped_overlay, overlay_data = create_overlay_and_calculate_props(keypoint_data, seg_name, img_cropped, out_polygons, out_labels, out_color, cfg)
+                            full_image = create_insert(full_image, overlay_data, seg_name_short, cfg)
 
-                        # with lock:
-                        value[dict_name_seg].append({seg_name: detected_components})#*************************** TODO see how to save some RAM
-                        # seg_overlay[filename].append({seg_name: cropped_overlay}) #*************************** TODO
-                        # seg_overlay_data[filename].append({seg_name: overlay_data})#*************************** TODO
+                            cropped_overlay_size = cropped_overlay.shape
 
-                        save_rgb_cropped(save_rgb_cropped_images, seg_name, img_cropped, leaf_type, Dirs)
+                    else: # Fail
+                        detected_components = []
+                        cropped_overlay = []
+                        overlay_data = []
+                        cropped_overlay_size = []
+                        keypoint_data = []
 
-                        save_individual_segmentations(save_individual_overlay_images, dict_name_seg, seg_name, cropped_overlay, Dirs)
+                    value[dict_name_seg].append({seg_name: detected_components})#*************************** TODO see how to save some RAM
 
-                        full_mask = save_masks_color(keypoint_data, save_oriented_images, save_ind_masks_color, save_full_image_masks_color,
-                                                     save_individual_leaves_white_background, use_efds_for_masks, full_mask, overlay_data,
-                                                     cropped_overlay_size, full_size, seg_name, seg_name_short, img_cropped,
-                                                     leaf_type, Dirs, CF)
+                    save_rgb_cropped(save_rgb_cropped_images, seg_name, img_cropped, leaf_type, Dirs)
+
+                    save_individual_segmentations(save_individual_overlay_images, dict_name_seg, seg_name, cropped_overlay, Dirs)
+
+                    full_mask = save_masks_color(keypoint_data, save_oriented_images, save_ind_masks_color, save_full_image_masks_color,
+                                                 save_individual_leaves_white_background, use_efds_for_masks, full_mask, overlay_data,
+                                                 cropped_overlay_size, full_size, seg_name, seg_name_short, img_cropped,
+                                                 leaf_type, Dirs, CF)
 
         save_full_masks(save_full_image_masks_color, full_mask, filename, leaf_type, Dirs)
         save_full_overlay_images(save_each_segmentation_overlay_image, full_image, filename, leaf_type, Dirs)
@@ -550,10 +526,37 @@ def save_individual_leaf_white_background(use_polys, overlay_color, img_cropped,
 
     cv2.imwrite(os.path.join(dir_out, '.'.join([seg_name, 'png'])), out_img)
 
+
+def _has_valid_keypoint_entry(keypoint_data, seg_name):
+    if not isinstance(keypoint_data, dict):
+        return False
+
+    item = keypoint_data.get(seg_name)
+    if not isinstance(item, dict):
+        return False
+
+    angle = item.get('angle', None)
+    try:
+        float(angle)
+    except (TypeError, ValueError):
+        return False
+
+    tip = item.get('tip', None)
+    base = item.get('base', None)
+    if tip is None or base is None:
+        return False
+
+    if not isinstance(tip, (list, tuple, np.ndarray)) or not isinstance(base, (list, tuple, np.ndarray)):
+        return False
+    if len(tip) < 2 or len(base) < 2:
+        return False
+
+    return True
+
 ##### For mask saving
 def rotate_mask_using_keypoint_data(dir_out, seg_name, save_oriented_images, keypoint_data, img):
     # Handle rotation 
-    angle = keypoint_data[seg_name]['angle']
+    angle = float(keypoint_data[seg_name]['angle'])
     img_np = np.array(img)
     if img_np is None or not isinstance(img_np, np.ndarray) or img_np.size == 0:
         return img_np, -angle
@@ -1003,7 +1006,7 @@ def save_masks_color(keypoint_data, save_oriented_images, save_individual_masks_
                     save_individual_leaf_white_background(use_polys, overlay_color, img_cropped, seg_name, leaf_type, Dirs)
 
                 # Handle rotation 
-                if keypoint_data:
+                if _has_valid_keypoint_entry(keypoint_data, seg_name):
                     oriented_mask, angle = rotate_mask_using_keypoint_data(Dirs.dir_oriented_masks, seg_name, save_oriented_images, keypoint_data, img)
 
                     # Simple txt file
@@ -1023,7 +1026,7 @@ def save_masks_color(keypoint_data, save_oriented_images, save_individual_masks_
                     save_individual_leaf_white_background(use_polys, overlay_color, img_cropped, seg_name, leaf_type, Dirs)
 
                 # Handle rotation 
-                if keypoint_data:
+                if _has_valid_keypoint_entry(keypoint_data, seg_name):
                     oriented_mask, angle = rotate_mask_using_keypoint_data(Dirs.dir_oriented_masks, seg_name, save_oriented_images, keypoint_data, img)
 
                     # Simple txt file
