@@ -24,6 +24,105 @@ from detect import run
 from landmark_processing import LeafSkeleton
 from armature_processing import ArmatureSkeleton
 
+
+def _is_cuda_kernel_compat_error(exc):
+    msg = str(exc).lower()
+    return any(err in msg for err in [
+        'no kernel image is available for execution on the device',
+        'not compatible with the current pytorch installation',
+        'unsupported gpu architecture',
+        'cuda capability sm_',
+    ])
+
+
+def _probe_cuda_device(gpu_idx):
+    try:
+        with torch.no_grad():
+            x = torch.randn((64, 64), device=f'cuda:{gpu_idx}')
+            y = x @ x
+            _ = y.sum().item()
+        torch.cuda.synchronize(gpu_idx)
+        return True, None
+    except Exception as exc:
+        return False, exc
+
+
+def _resolve_device_list(cfg, logger):
+    requested_device = str(cfg['leafmachine']['project'].get('device', 'cpu')).lower()
+    if requested_device != 'cuda':
+        return ['cpu']
+
+    if not torch.cuda.is_available():
+        logger.warning('CUDA requested in config, but torch.cuda.is_available() is False. Falling back to CPU.')
+        return ['cpu']
+
+    num_available = torch.cuda.device_count()
+    if num_available < 1:
+        logger.warning('CUDA requested in config, but no CUDA devices were detected. Falling back to CPU.')
+        return ['cpu']
+
+    num_requested = int(cfg['leafmachine']['project'].get('num_gpus', 1) or 1)
+    num_to_use = min(max(num_requested, 1), num_available)
+
+    try:
+        compiled_arches = set(torch.cuda.get_arch_list())
+    except Exception:
+        compiled_arches = set()
+
+    device_list = []
+    unsupported_devices = []
+    arch_list_probe_devices = []
+    for gpu_idx in range(num_to_use):
+        try:
+            major, minor = torch.cuda.get_device_capability(gpu_idx)
+            arch = f'sm_{major}{minor}'
+
+            # Exact SM matching is too strict for some wheels/hardware combos
+            # (for example, sm_89 devices can work with wheels that list sm_86).
+            # Perform a tiny runtime probe before rejecting a GPU.
+            probe_ok, probe_exc = _probe_cuda_device(gpu_idx)
+            if probe_ok:
+                device_list.append(gpu_idx)
+                if compiled_arches and arch not in compiled_arches:
+                    gpu_name = torch.cuda.get_device_name(gpu_idx)
+                    arch_list_probe_devices.append(f'CUDA:{gpu_idx} {gpu_name} ({arch})')
+            else:
+                gpu_name = torch.cuda.get_device_name(gpu_idx)
+                unsupported_devices.append(f'CUDA:{gpu_idx} {gpu_name} ({arch}) runtime probe failed: {probe_exc}')
+        except Exception as e:
+            unsupported_devices.append(f'CUDA:{gpu_idx} ({e})')
+
+    if device_list:
+        if arch_list_probe_devices:
+            logger.warning(
+                'Using CUDA devices that are not explicitly listed in torch.cuda.get_arch_list(), '
+                f'but passed runtime probe: {", ".join(arch_list_probe_devices)}'
+            )
+        if unsupported_devices:
+            logger.warning(
+                f"Skipping unsupported CUDA devices for this PyTorch build: {', '.join(unsupported_devices)}. "
+                'Using compatible devices only.'
+            )
+        return device_list
+
+    logger.warning(
+        'CUDA requested, but no compatible GPU architecture was found in this PyTorch build. Falling back to CPU.'
+    )
+    return ['cpu']
+
+
+def _run_detector_with_fallback(run_kwargs, device, logger):
+    try:
+        run(device=device, LOGGER=logger, **run_kwargs)
+    except Exception as e:
+        if device != 'cpu' and _is_cuda_kernel_compat_error(e):
+            logger.warning(
+                f'CUDA execution failed on device {device}. Retrying batch on CPU. Original error: {e}'
+            )
+            run(device='cpu', LOGGER=logger, **run_kwargs)
+            return
+        raise
+
 def detect_plant_components(cfg, time_report, logger, dir_home, Project, Dirs):
     t1_start = perf_counter()
     n_images = len(os.listdir(Project.dir_images))
@@ -39,11 +138,7 @@ def detect_plant_components(cfg, time_report, logger, dir_home, Project, Dirs):
     else:
         num_workers = int(cfg['leafmachine']['project']['num_workers'])
 
-    if cfg['leafmachine']['project']['device'] == 'cuda':
-        num_gpus = int(cfg['leafmachine']['project'].get('num_gpus', 1))  # Default to 1 GPU if not specified
-        device_list = [i for i in range(num_gpus)]  # List of GPU indices like [0, 1, 2, ...]
-    else:
-        device_list = ['cpu']  # Default to CPU if CUDA is not available
+    device_list = _resolve_device_list(cfg, logger)
 
     # Weights folder base
     dir_weights = os.path.join(dir_home, 'leafmachine2', 'component_detector','runs','train')
@@ -144,11 +239,7 @@ def detect_archival_components(cfg, time_report, logger, dir_home, Project, Dirs
     else:
         num_workers = int(cfg['leafmachine']['project']['num_workers'])
 
-    if cfg['leafmachine']['project']['device'] == 'cuda':
-        num_gpus = int(cfg['leafmachine']['project'].get('num_gpus', 1))  # Default to 1 GPU if not specified
-        device_list = [i for i in range(num_gpus)]  # List of GPU indices like [0, 1, 2, ...]
-    else:
-        device_list = ['cpu']  # Default to CPU if CUDA is not available
+    device_list = _resolve_device_list(cfg, logger)
     
     # Weights folder base
     dir_weights = os.path.join(dir_home, 'leafmachine2', 'component_detector','runs','train')
@@ -248,11 +339,7 @@ def detect_armature_components(cfg, logger, dir_home, Project, Dirs):
     else:
         num_workers = int(cfg['leafmachine']['project']['num_workers'])
 
-    if cfg['leafmachine']['project']['device'] == 'cuda':
-        num_gpus = int(cfg['leafmachine']['project'].get('num_gpus', 1))  # Default to 1 GPU if not specified
-        device_list = [i for i in range(num_gpus)]  # List of GPU indices like [0, 1, 2, ...]
-    else:
-        device_list = ['cpu']  # Default to CPU if CUDA is not available
+    device_list = _resolve_device_list(cfg, logger)
 
     # Weights folder base
     dir_weights = os.path.join(dir_home, 'leafmachine2', 'component_detector','runs','train')
@@ -356,18 +443,19 @@ def worker_object_detector(queue, weights, project, name, imgsz, nosave, anno_ty
             queue.task_done()
             continue
         try:
-            run(weights=weights,
-                source=sub_source,
-                project=project,
-                name=name,
-                imgsz=imgsz,
-                nosave=nosave,
-                anno_type=anno_type,
-                conf_thres=conf_thres,
-                ignore_objects_for_overlay=ignore_objects_for_overlay,
-                mode=mode,
-                device=device,
-                LOGGER=LOGGER)
+            run_kwargs = {
+                'weights': weights,
+                'source': sub_source,
+                'project': project,
+                'name': name,
+                'imgsz': imgsz,
+                'nosave': nosave,
+                'anno_type': anno_type,
+                'conf_thres': conf_thres,
+                'ignore_objects_for_overlay': ignore_objects_for_overlay,
+                'mode': mode,
+            }
+            _run_detector_with_fallback(run_kwargs, device, LOGGER)
         except Exception as e:
             LOGGER.error(f'Error in processing: {e}')
         queue.task_done()
@@ -384,18 +472,22 @@ def run_in_parallel(weights, source, project, name, imgsz, nosave, anno_type, co
 
     sub_source = [os.path.join(source, f) for f in os.listdir(source)[start:end] if f.lower().endswith('.jpg')]
 
-    run(weights=weights,
-        source=sub_source,
-        project=project,
-        name=name,
-        imgsz=imgsz,
-        nosave=nosave,
-        anno_type=anno_type,
-        conf_thres=conf_thres,
-        ignore_objects_for_overlay=ignore_objects_for_overlay,
-        mode=mode,
-        device=device,
-        LOGGER=LOGGER)
+    run_kwargs = {
+        'weights': weights,
+        'source': sub_source,
+        'project': project,
+        'name': name,
+        'imgsz': imgsz,
+        'nosave': nosave,
+        'anno_type': anno_type,
+        'conf_thres': conf_thres,
+        'ignore_objects_for_overlay': ignore_objects_for_overlay,
+        'mode': mode,
+    }
+    try:
+        _run_detector_with_fallback(run_kwargs, device, LOGGER)
+    except Exception as e:
+        LOGGER.error(f'Error in processing: {e}')
 
 ''' RUN IN PARALLEL'''
 
@@ -839,11 +931,7 @@ def run_landmarks(cfg, logger, show_all_logs, dir_home, Project, batch, n_batche
         # Weights folder base
         dir_weights = os.path.join(dir_home, 'leafmachine2', 'component_detector','runs','train')
 
-        if cfg['leafmachine']['project']['device'] == 'cuda':
-            num_gpus = int(cfg['leafmachine']['project'].get('num_gpus', 1))  # Default to 1 GPU if not specified
-            device_list = [i for i in range(num_gpus)]  # List of GPU indices like [0, 1, 2, ...]
-        else:
-            device_list = ['cpu']  # Default to CPU if CUDA is not available
+        device_list = _resolve_device_list(cfg, logger)
         
         # Detection threshold
         threshold = cfg['leafmachine']['landmark_detector']['minimum_confidence_threshold']

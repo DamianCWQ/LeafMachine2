@@ -45,7 +45,8 @@ def build_LM2_config():
     }
 
     logging_section = {
-        'log_level': None
+        'log_level': None,
+        'suppress_library_info_logs': True,
     }
 
     default_output_folder = get_default_download_folder()
@@ -124,6 +125,11 @@ def build_LM2_config():
         'show_archival_detections': True,
         'show_plant_detections': True,
         'show_segmentations': True,
+        'show_plant_component_segmentations': True,
+        'plant_component_segmentation_draw_order': 'after_leaf_masks',
+        'draw_plant_component_segmentation_polygon': True,
+        'draw_plant_component_segmentation_bbox': True,
+        'draw_plant_component_segmentation_labels': True,
         'show_landmarks': True,
         'ignore_archival_detections_classes': [],
         'ignore_plant_detections_classes': ['leaf_whole',], # Could also include 'leaf_partial' and others if needed
@@ -133,10 +139,12 @@ def build_LM2_config():
         'line_width_plant': 12, # Previous value given was 6
         'line_width_seg': 12, # 12 is specified as "thick"
         'line_width_efd': 12, # 3 is specified as "thick" but 12 is given here
+        'line_width_plant_component_segmentation': 2,
         'alpha_transparency_archival': 0.3,
         'alpha_transparency_plant': 0,
         'alpha_transparency_seg_whole_leaf': 0.4,
-        'alpha_transparency_seg_partial_leaf': 0.3
+        'alpha_transparency_seg_partial_leaf': 0.3,
+        'alpha_transparency_seg_plant_components': 0.35,
     }
 
     plant_component_detector_section = {
@@ -248,6 +256,41 @@ def build_LM2_config():
         'detector_version': 'uniform_spaced_oriented_traces_mid15_pet5_clean_640_flipidx_pt2'
     }
 
+    plant_component_segmentation_section = {
+        'enable': False,
+        'sam2_model_config': '',
+        'sam2_checkpoint': '',
+        'plantsam_checkpoint': '',
+        'segment_classes': [2, 3, 4, 5, 6, 7, 8, 9, 10],
+        'segment_classes_include': [],
+        'segment_classes_exclude': [0, 1],
+        'specialization_fallback_to_base': True,
+        'minimum_detection_confidence': 0.35,
+        'minimum_bbox_size_px': 20,
+        'enable_contained_box_dedup': True,
+        'dedup_within_class_only': True,
+        'bbox_padding_px': 2,
+        'bbox_padding_ratio': 0.01,
+        'max_bbox_area_ratio': 0.75,
+        'max_bbox_aspect_ratio': 12.0,
+        'mask_postprocess_enable': True,
+        'mask_cleanup_kernel_precision': 5,
+        'mask_cleanup_kernel_recall': 3,
+        'mask_min_component_area_ratio_precision': 0.01,
+        'mask_min_component_area_ratio_recall': 0.003,
+        'mask_fill_ratio_min': 0.003,
+        'mask_fill_ratio_max': 0.98,
+        'contour_simplify_epsilon_ratio': 0.003,
+        'save_mask_png': True,
+        'save_masked_rgb': True,
+        'save_polygon_json': True,
+        'save_overlay_images': True,
+        'multimask_output': False,
+        'cuda_sdpa_mode': 'auto',
+        'cuda_enable_cudnn_sdpa': False,
+        'device': 'cuda',
+    }
+
     # Add the sections to the 'leafmachine' key
     config_data['leafmachine']['do'] = do_section
     config_data['leafmachine']['print'] = print_section
@@ -264,6 +307,7 @@ def build_LM2_config():
     config_data['leafmachine']['landmark_detector_armature'] = landmark_detector_armature_section
     config_data['leafmachine']['ruler_detection'] = ruler_detection_section
     config_data['leafmachine']['leaf_segmentation'] = leaf_segmentation_section
+    config_data['leafmachine']['plant_component_segmentation'] = plant_component_segmentation_section
 
     return config_data, dir_home
 

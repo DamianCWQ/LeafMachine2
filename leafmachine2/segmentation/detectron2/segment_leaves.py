@@ -31,6 +31,98 @@ from leafmachine2.keypoint_detector.ultralytics.models.yolo.pose.predict_direct 
 from leafmachine2.component_detector.component_detector import unpack_class_from_components#, crop_images_to_bbox
 from leafmachine2.segmentation.detectron2.segment_utils import get_largest_polygon, keep_rows, get_string_indices
 
+
+_ARCH_LIST_COMPAT_NOTE_LOGGED = False
+
+
+def _is_cuda_kernel_compat_error(exc):
+    msg = str(exc).lower()
+    return any(err in msg for err in [
+        'no kernel image is available for execution on the device',
+        'not compatible with the current pytorch installation',
+        'unsupported gpu architecture',
+        'cuda capability sm_',
+    ])
+
+
+def _probe_cuda_device(gpu_idx):
+    try:
+        with torch.no_grad():
+            x = torch.randn((64, 64), device=f'cuda:{gpu_idx}')
+            y = x @ x
+            _ = y.sum().item()
+        torch.cuda.synchronize(gpu_idx)
+        return True, None
+    except Exception as exc:
+        return False, exc
+
+
+def _resolve_segmentation_device_list(cfg, logger):
+    global _ARCH_LIST_COMPAT_NOTE_LOGGED
+
+    requested_device = str(cfg['leafmachine']['project'].get('device', 'cpu')).lower()
+    if requested_device != 'cuda':
+        return ['cpu']
+
+    if not torch.cuda.is_available():
+        logger.warning('CUDA requested for leaf segmentation, but torch.cuda.is_available() is False. Falling back to CPU.')
+        return ['cpu']
+
+    num_available = torch.cuda.device_count()
+    if num_available < 1:
+        logger.warning('CUDA requested for leaf segmentation, but no CUDA devices were detected. Falling back to CPU.')
+        return ['cpu']
+
+    num_requested = int(cfg['leafmachine']['project'].get('num_gpus', 1) or 1)
+    num_to_use = min(max(num_requested, 1), num_available)
+
+    try:
+        compiled_arches = set(torch.cuda.get_arch_list())
+    except Exception:
+        compiled_arches = set()
+
+    device_list = []
+    unsupported_devices = []
+    arch_list_probe_devices = []
+    for gpu_idx in range(num_to_use):
+        try:
+            major, minor = torch.cuda.get_device_capability(gpu_idx)
+            arch = f'sm_{major}{minor}'
+
+            # Use a runtime probe to avoid false negatives from exact SM matching.
+            probe_ok, probe_exc = _probe_cuda_device(gpu_idx)
+            if probe_ok:
+                device_list.append(f'cuda:{gpu_idx}')
+                if compiled_arches and arch not in compiled_arches:
+                    gpu_name = torch.cuda.get_device_name(gpu_idx)
+                    arch_list_probe_devices.append(f'cuda:{gpu_idx} {gpu_name} ({arch})')
+            else:
+                gpu_name = torch.cuda.get_device_name(gpu_idx)
+                unsupported_devices.append(f'cuda:{gpu_idx} {gpu_name} ({arch}) runtime probe failed: {probe_exc}')
+        except Exception as e:
+            unsupported_devices.append(f'cuda:{gpu_idx} ({e})')
+
+    if device_list:
+        if arch_list_probe_devices:
+            if not _ARCH_LIST_COMPAT_NOTE_LOGGED:
+                logger.info(
+                    'CUDA compatibility note for leaf segmentation: device(s) not explicitly listed in '
+                    f'torch.cuda.get_arch_list() passed runtime probe and will be used: {", ".join(arch_list_probe_devices)}'
+                )
+                _ARCH_LIST_COMPAT_NOTE_LOGGED = True
+        if unsupported_devices:
+            logger.warning(
+                f"Skipping unsupported CUDA devices for leaf segmentation: {', '.join(unsupported_devices)}. "
+                'Using compatible devices only.'
+            )
+        return device_list
+
+    logger.warning(
+        'CUDA requested for leaf segmentation, but no compatible GPU architecture was found in this PyTorch build. '
+        'Falling back to CPU.'
+    )
+    return ['cpu']
+
 def segment_leaves(cfg, time_report, logger, dir_home, Project, batch, n_batches, Dirs): 
     start_t = perf_counter()
     logger.name = f'[BATCH {batch+1} Segment Leaves]'
@@ -42,11 +134,7 @@ def segment_leaves(cfg, time_report, logger, dir_home, Project, batch, n_batches
     else:
         num_workers = int(cfg['leafmachine']['project']['num_workers_seg'])
 
-    if cfg['leafmachine']['project']['device'] == 'cuda':
-        num_gpus = int(cfg['leafmachine']['project'].get('num_gpus', 1))  # Default to 1 GPU if not specified
-        device_list = [f'cuda:{i}' for i in range(num_gpus)]
-    else:
-        device_list = ['cpu']  # Default to CPU if CUDA is not available
+    device_list = _resolve_segmentation_device_list(cfg, logger)
 
     # See convert_index_to_class(ind) for list of ind -> cls
     Project.project_data_list[batch] = unpack_class_from_components(Project.project_data_list[batch], 0, 'Whole_Leaf_BBoxes_YOLO', 'Whole_Leaf_BBoxes', Project)
@@ -257,9 +345,18 @@ def segment_images(logger, dir_home, dict_objects, leaf_type, dict_name_seg, dic
     }
 
     # Initialize PosePredictor
-    Pose_Predictor = PosePredictor(weights, Dirs.dir_oriented_images, Dirs.dir_keypoint_overlay, device=device,
-                                   save_oriented_images=save_oriented_images, save_keypoint_overlay=save_keypoint_overlay, 
-                                   overrides=overrides)
+    try:
+        Pose_Predictor = PosePredictor(weights, Dirs.dir_oriented_images, Dirs.dir_keypoint_overlay, device=device,
+                                       save_oriented_images=save_oriented_images, save_keypoint_overlay=save_keypoint_overlay,
+                                       overrides=overrides)
+    except Exception as e:
+        if device != 'cpu' and _is_cuda_kernel_compat_error(e):
+            logger.warning(f'Pose keypoint model failed on {device}. Retrying on CPU. Original error: {e}')
+            Pose_Predictor = PosePredictor(weights, Dirs.dir_oriented_images, Dirs.dir_keypoint_overlay, device='cpu',
+                                           save_oriented_images=save_oriented_images, save_keypoint_overlay=save_keypoint_overlay,
+                                           overrides=overrides)
+        else:
+            raise
     
     generate_overlay = cfg['leafmachine']['leaf_segmentation']['generate_overlay']
     overlay_dpi = cfg['leafmachine']['leaf_segmentation']['overlay_dpi']
@@ -311,71 +408,47 @@ def segment_images(logger, dir_home, dict_objects, leaf_type, dict_name_seg, dic
         if value[dict_from] is not []:
             for cropped in value[dict_from]: # Individual leaf
                 for seg_name, img_cropped in cropped.items():
-                    with lock:
-                    
-                        keypoint_data = {}
-                        # print(seg_name)
-                        logger.debug(f'segmenting - {seg_name}')
+                    keypoint_data = {}
+                    logger.debug(f'segmenting - {seg_name}')
 
-                        seg_name_short = seg_name.split("__")[2]
-                        # cropped_overlay = []
+                    seg_name_short = seg_name.split("__")[2]
 
+                    # Segment!
+                    out_polygons, out_bboxes, out_labels, out_color = Instance_Detector.segment(img_cropped, generate_overlay, overlay_dpi, bg_color)
+                    keypoint_data = Pose_Predictor.process_images(img_cropped, filename=seg_name)
 
-                        # Segment!
-                        # fig, out_polygons, out_bboxes, out_labels, out_color = Instance_Detector.segment(img_cropped, generate_overlay, overlay_dpi, bg_color)
-                        # try:
-                        out_polygons, out_bboxes, out_labels, out_color = Instance_Detector.segment(img_cropped, generate_overlay, overlay_dpi, bg_color)
-                        keypoint_data = Pose_Predictor.process_images(img_cropped, filename=seg_name)
-                        # print(keypoint_data)
-
-                        # except:
-                        #     detected_components = []
-                        #     cropped_overlay = []
-                        #     overlay_data = []
-                        #     cropped_overlay_size = []
-                        #     out_polygons = []
-                        #     keypoint_data = []
+                    if len(out_polygons) > 0: # Success
+                        if keep_best:
+                            out_polygons, out_bboxes, out_labels, out_color = keep_rows(out_polygons, out_bboxes, out_labels, out_color, get_string_indices(out_labels))
                         
-                        if len(out_polygons) > 0: # Success
-                            if keep_best:
-                                out_polygons, out_bboxes, out_labels, out_color = keep_rows(out_polygons, out_bboxes, out_labels, out_color, get_string_indices(out_labels))
-                            
-                            if (out_polygons is None) and (out_bboxes is None) and (out_labels is None) and (out_color is None):
-                                detected_components = []
-                                cropped_overlay = []
-                                overlay_data = []
-                                cropped_overlay_size = []
-                            else:
-                                # detected_components, cropped_overlay, cropped_overlay_oriented, overlay_data, new_width, new_height = create_overlay_and_calculate_props(keypoint_data, seg_name, img_cropped, out_polygons, out_labels, out_color, cfg)
-                                detected_components, cropped_overlay, overlay_data = create_overlay_and_calculate_props(keypoint_data, seg_name, img_cropped, out_polygons, out_labels, out_color, cfg)
-                                # full_image = create_insert_legacy(full_image, cropped_overlay, seg_name_short)
-                                full_image = create_insert(full_image, overlay_data, seg_name_short, cfg)
-
-                                cropped_overlay_size = cropped_overlay.shape
-                                # cropped_overlay_oriented_size = cropped_overlay_oriented.shape
-                                # cropped_overlay_oriented_size = (new_width, new_height)
-
-                        else: # Fail
+                        if (out_polygons is None) and (out_bboxes is None) and (out_labels is None) and (out_color is None):
                             detected_components = []
                             cropped_overlay = []
                             overlay_data = []
                             cropped_overlay_size = []
-                            keypoint_data = []
-                            # cropped_overlay_oriented_size = []
+                        else:
+                            detected_components, cropped_overlay, overlay_data = create_overlay_and_calculate_props(keypoint_data, seg_name, img_cropped, out_polygons, out_labels, out_color, cfg)
+                            full_image = create_insert(full_image, overlay_data, seg_name_short, cfg)
 
-                        # with lock:
-                        value[dict_name_seg].append({seg_name: detected_components})#*************************** TODO see how to save some RAM
-                        # seg_overlay[filename].append({seg_name: cropped_overlay}) #*************************** TODO
-                        # seg_overlay_data[filename].append({seg_name: overlay_data})#*************************** TODO
+                            cropped_overlay_size = cropped_overlay.shape
 
-                        save_rgb_cropped(save_rgb_cropped_images, seg_name, img_cropped, leaf_type, Dirs)
+                    else: # Fail
+                        detected_components = []
+                        cropped_overlay = []
+                        overlay_data = []
+                        cropped_overlay_size = []
+                        keypoint_data = []
 
-                        save_individual_segmentations(save_individual_overlay_images, dict_name_seg, seg_name, cropped_overlay, Dirs)
+                    value[dict_name_seg].append({seg_name: detected_components})#*************************** TODO see how to save some RAM
 
-                        full_mask = save_masks_color(keypoint_data, save_oriented_images, save_ind_masks_color, save_full_image_masks_color,
-                                                     save_individual_leaves_white_background, use_efds_for_masks, full_mask, overlay_data,
-                                                     cropped_overlay_size, full_size, seg_name, seg_name_short, img_cropped,
-                                                     leaf_type, Dirs, CF)
+                    save_rgb_cropped(save_rgb_cropped_images, seg_name, img_cropped, leaf_type, Dirs)
+
+                    save_individual_segmentations(save_individual_overlay_images, dict_name_seg, seg_name, cropped_overlay, Dirs)
+
+                    full_mask = save_masks_color(keypoint_data, save_oriented_images, save_ind_masks_color, save_full_image_masks_color,
+                                                 save_individual_leaves_white_background, use_efds_for_masks, full_mask, overlay_data,
+                                                 cropped_overlay_size, full_size, seg_name, seg_name_short, img_cropped,
+                                                 leaf_type, Dirs, CF)
 
         save_full_masks(save_full_image_masks_color, full_mask, filename, leaf_type, Dirs)
         save_full_overlay_images(save_each_segmentation_overlay_image, full_image, filename, leaf_type, Dirs)
@@ -453,12 +526,45 @@ def save_individual_leaf_white_background(use_polys, overlay_color, img_cropped,
 
     cv2.imwrite(os.path.join(dir_out, '.'.join([seg_name, 'png'])), out_img)
 
+
+def _has_valid_keypoint_entry(keypoint_data, seg_name):
+    if not isinstance(keypoint_data, dict):
+        return False
+
+    item = keypoint_data.get(seg_name)
+    if not isinstance(item, dict):
+        return False
+
+    angle = item.get('angle', None)
+    try:
+        float(angle)
+    except (TypeError, ValueError):
+        return False
+
+    tip = item.get('tip', None)
+    base = item.get('base', None)
+    if tip is None or base is None:
+        return False
+
+    if not isinstance(tip, (list, tuple, np.ndarray)) or not isinstance(base, (list, tuple, np.ndarray)):
+        return False
+    if len(tip) < 2 or len(base) < 2:
+        return False
+
+    return True
+
 ##### For mask saving
 def rotate_mask_using_keypoint_data(dir_out, seg_name, save_oriented_images, keypoint_data, img):
     # Handle rotation 
-    img_cv2 = cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR)
-    angle = keypoint_data[seg_name]['angle']
+    angle = float(keypoint_data[seg_name]['angle'])
+    img_np = np.array(img)
+    if img_np is None or not isinstance(img_np, np.ndarray) or img_np.size == 0:
+        return img_np, -angle
+
+    img_cv2 = cv2.cvtColor(img_np, cv2.COLOR_RGB2BGR)
     oriented_mask = rotate_image(-angle, img_cv2, save_oriented_images)
+    if oriented_mask is None or oriented_mask.size == 0:
+        oriented_mask = img_cv2
     ### oriented_mask = Image.fromarray(cv2.cvtColor(oriented_mask, cv2.COLOR_BGR2RGB))
     ### oriented_mask.save(os.path.join(dir_out, '.'.join([seg_name, 'png'])))
     
@@ -471,6 +577,8 @@ def rotate_mask_using_keypoint_data(dir_out, seg_name, save_oriented_images, key
     color_petiole = (255, 173, 0)
     
     def find_centroid(color, img):
+        if img is None or not isinstance(img, np.ndarray) or img.size == 0:
+            return None
         mask = cv2.inRange(img, np.array(color), np.array(color))
         moments = cv2.moments(mask)
         if moments["m00"] != 0:
@@ -488,7 +596,10 @@ def rotate_mask_using_keypoint_data(dir_out, seg_name, save_oriented_images, key
         angle = 180 - angle
 
     # Save the oriented mask
-    cv2.imwrite(os.path.join(dir_out, '.'.join([seg_name, 'png'])), oriented_mask)
+    if oriented_mask is not None and isinstance(oriented_mask, np.ndarray) and oriented_mask.size > 0:
+        if dir_out:
+            os.makedirs(dir_out, exist_ok=True)
+        cv2.imwrite(os.path.join(dir_out, '.'.join([seg_name, 'png'])), oriented_mask)
 
     return oriented_mask, -angle
 
@@ -779,6 +890,9 @@ def save_simple_txt(dir_simple_txt, rotated_contour, top, bottom, closest_tip_po
                     full_size, CF, max_extent, x_min, y_min):
     # Construct the full path for the txt file
     file_path = os.path.join(dir_simple_txt, '.'.join([filename, 'txt']))
+    parent_dir = os.path.dirname(file_path)
+    if parent_dir:
+        os.makedirs(parent_dir, exist_ok=True)
     
     # Open the file in write mode
     with open(file_path, 'w') as file:
@@ -811,6 +925,9 @@ def save_simple_txt(dir_simple_txt, rotated_contour, top, bottom, closest_tip_po
 def save_raw_contour_txt(dir_raw_txt, raw_contour, seg_name, full_size, CF, angle):
     # Construct the full path for the raw txt file
     file_path = os.path.join(dir_raw_txt, f'{seg_name}.txt')
+    parent_dir = os.path.dirname(file_path)
+    if parent_dir:
+        os.makedirs(parent_dir, exist_ok=True)
     bbox_str = seg_name.split('__L__')[-1].split('.')[0]
     bbox = tuple(map(int, bbox_str.split('-')))
     
@@ -889,7 +1006,7 @@ def save_masks_color(keypoint_data, save_oriented_images, save_individual_masks_
                     save_individual_leaf_white_background(use_polys, overlay_color, img_cropped, seg_name, leaf_type, Dirs)
 
                 # Handle rotation 
-                if keypoint_data:
+                if _has_valid_keypoint_entry(keypoint_data, seg_name):
                     oriented_mask, angle = rotate_mask_using_keypoint_data(Dirs.dir_oriented_masks, seg_name, save_oriented_images, keypoint_data, img)
 
                     # Simple txt file
@@ -909,14 +1026,14 @@ def save_masks_color(keypoint_data, save_oriented_images, save_individual_masks_
                     save_individual_leaf_white_background(use_polys, overlay_color, img_cropped, seg_name, leaf_type, Dirs)
 
                 # Handle rotation 
-                if keypoint_data:
+                if _has_valid_keypoint_entry(keypoint_data, seg_name):
                     oriented_mask, angle = rotate_mask_using_keypoint_data(Dirs.dir_oriented_masks, seg_name, save_oriented_images, keypoint_data, img)
 
                     # Simple txt file
                     unique_colors = find_unique_colors(oriented_mask)
                     mask_leaf, masks, has_leaf_color = segment_masks(unique_colors, oriented_mask)
                     if has_leaf_color:
-                        raw_contour, rotated_contour, max_extent, x_min, y_min, top, bottom = create_perimeter_normalize(mask_leaf, keypoint_data, seg_name)
+                        raw_contour, rotated_contour, max_extent, x_min, y_min, top, bottom, closest_tip_point, closest_base_point = create_perimeter_normalize(mask_leaf, keypoint_data, seg_name)
                         save_simple_txt(Dirs.dir_simple_txt, rotated_contour, top, bottom, closest_tip_point, closest_base_point, angle, seg_name, full_size, CF, max_extent, x_min, y_min)
                         save_raw_contour_txt(Dirs.dir_simple_raw_txt, raw_contour, seg_name, full_size, CF, angle)
 
@@ -1113,29 +1230,34 @@ def rotate_polygon_around_image_center(points, angle_degrees, img_width, img_hei
 
 
 def rotate_image(angle, orig_img, save_oriented_images):
-    if save_oriented_images:
-        # Calculate the center of the image and the image size
-        image_center = tuple(np.array(orig_img.shape[1::-1]) / 2)
-        height, width = orig_img.shape[:2]
+    if orig_img is None or not isinstance(orig_img, np.ndarray) or orig_img.size == 0:
+        return orig_img
 
-        # Calculate the rotation matrix for the given angle
-        rot_mat = cv2.getRotationMatrix2D(image_center, angle, 1.0)
+    # Rotation output is required downstream even when files are not written.
+    _ = save_oriented_images
 
-        # Calculate the sine and cosine of the rotation angle
-        abs_cos = abs(rot_mat[0, 0])
-        abs_sin = abs(rot_mat[0, 1])
+    # Calculate the center of the image and the image size
+    image_center = tuple(np.array(orig_img.shape[1::-1]) / 2)
+    height, width = orig_img.shape[:2]
 
-        # Calculate the new bounding dimensions of the image
-        bound_w = int(height * abs_sin + width * abs_cos)
-        bound_h = int(height * abs_cos + width * abs_sin)
+    # Calculate the rotation matrix for the given angle
+    rot_mat = cv2.getRotationMatrix2D(image_center, angle, 1.0)
 
-        # Adjust the rotation matrix to take into account translation
-        rot_mat[0, 2] += bound_w / 2 - image_center[0]
-        rot_mat[1, 2] += bound_h / 2 - image_center[1]
+    # Calculate the sine and cosine of the rotation angle
+    abs_cos = abs(rot_mat[0, 0])
+    abs_sin = abs(rot_mat[0, 1])
 
-        # Perform the rotation, adjusting the canvas size
-        rotated_img = cv2.warpAffine(orig_img, rot_mat, (bound_w, bound_h), flags=cv2.INTER_NEAREST, borderMode=cv2.BORDER_CONSTANT)
-        return rotated_img
+    # Calculate the new bounding dimensions of the image
+    bound_w = int(height * abs_sin + width * abs_cos)
+    bound_h = int(height * abs_cos + width * abs_sin)
+
+    # Adjust the rotation matrix to take into account translation
+    rot_mat[0, 2] += bound_w / 2 - image_center[0]
+    rot_mat[1, 2] += bound_h / 2 - image_center[1]
+
+    # Perform the rotation, adjusting the canvas size
+    rotated_img = cv2.warpAffine(orig_img, rot_mat, (bound_w, bound_h), flags=cv2.INTER_NEAREST, borderMode=cv2.BORDER_CONSTANT)
+    return rotated_img
 
 
 def create_image_from_coords(coords, filename='output_image.png'):

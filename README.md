@@ -699,6 +699,52 @@ leafmachine:
         overlay_dpi: 300 # int |FROM| 100 to 300
         overlay_background_color: 'black' # str |FROM| 'white' or 'black'
 ```
+
+    ---
+    ### Primary options (plant_component_segmentation)
+    This optional stage uses one detection-guided SAM2 segmentation flow (YOLO boxes as prompts).
+
+    `sam2_model_config` and `sam2_checkpoint` are required to construct the SAM2 base model.
+    `plantsam_checkpoint` is optional specialization weights loaded into that same SAM2 model.
+
+    If specialization weights are missing or incompatible and `specialization_fallback_to_base: True`,
+    LM2 continues with the same SAM2 inference flow using base weights only.
+
+    Default class policy excludes class IDs `0` and `1` only (leaf_whole, leaf_partial),
+    so effective default active classes are `2-10`:
+    `leaflet, seed_fruit_one, seed_fruit_many, flower_one, flower_many, bud, specimen, roots, wood`.
+
+    ```yaml
+    leafmachine:
+        plant_component_segmentation:
+        enable: False
+        sam2_model_config: ''     # e.g. sam2_configs/sam2_hiera_l.yaml
+        sam2_checkpoint: ''       # required SAM2 base checkpoint
+        plantsam_checkpoint: ''   # optional PlantSAM specialization checkpoint loaded into SAM2
+        segment_classes: [2,3,4,5,6,7,8,9,10]
+        segment_classes_include: []
+        segment_classes_exclude: [0,1]
+        specialization_fallback_to_base: True
+        minimum_detection_confidence: 0.0
+        minimum_bbox_size_px: 12
+        save_mask_png: True
+        save_masked_rgb: True
+        save_polygon_json: True
+        save_overlay_images: True
+        multimask_output: False
+        device: cuda
+    ```
+
+    Outputs are saved under:
+    `Plant_Components/Segmentation_Plant_Components/{Masks,Masked_RGB,Polygons,Overlays}`.
+
+    Main overlay QA rendering can be controlled in `overlay` with:
+    `show_plant_component_segmentations`,
+    `plant_component_segmentation_draw_order`,
+    `draw_plant_component_segmentation_polygon`,
+    `draw_plant_component_segmentation_bbox`, and
+    `draw_plant_component_segmentation_labels`.
+
 ## SpecimenCrop Configuration Guide
 
 This configuration is for the `SpecimenCrop.py` script and relies on the `LeafMachine2` machine learning model. The primary purpose of this script is to locate all the desired objects inside a specimen image and crop the image to minimize blank space. The primary use case for this is the creation of XMP sidecar files to enhance the efficiency of working in Adobe Lightroom. There are two general usages:
