@@ -151,9 +151,9 @@ leafmachine:
     minimum_total_reproductive_counts: 0
     n_images_per_species: 10
     num_gpus: 1
-    num_workers: 1
-    num_workers_ruler: 1
-    num_workers_seg: 1
+    num_workers: 2
+    num_workers_ruler: 2
+    num_workers_seg: 2
     overlay_background_color: black
     overlay_dpi: 300
     path_combined_csv_local: null
