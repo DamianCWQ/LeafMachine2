@@ -44,5 +44,16 @@ class Settings(BaseSettings):
     # Laravel. Unused when callback auth is disabled.
     LARAVEL_CALLBACK_TOKEN: str = ""
 
+    # ── Callback payload shaping ────────────────────────────────────────────
+    # Include structured result_artifacts in the final callback payload.
+    CALLBACK_INCLUDE_RESULT_ARTIFACTS: bool = True
+
+    # Hard caps for callback arrays to avoid oversized payloads.
+    # A non-positive value disables the corresponding limit.
+    CALLBACK_MAX_RESULT_FILES: int = 30000
+    CALLBACK_MAX_RESULTS_DATA: int = 20000
+    CALLBACK_MAX_MEASUREMENT_RECORDS: int = 20000
+    CALLBACK_MAX_RESULT_ARTIFACTS: int = 40000
+
 
 settings = Settings()

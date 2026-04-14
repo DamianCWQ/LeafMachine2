@@ -82,6 +82,9 @@ def post_final(
     output_path: str,
     error_message: str | None = None,
     results_data: list[dict] | None = None,
+    measurement_records: list[dict] | None = None,
+    result_artifacts: list[dict] | None = None,
+    callback_payload_meta: dict | None = None,
 ) -> None:
     """Push the final job outcome (completed or failed) to Laravel.
 
@@ -109,6 +112,9 @@ def post_final(
         output_path=output_path,
         error_message=error_message,
         results_data=results_data,
+        measurement_records=measurement_records,
+        result_artifacts=result_artifacts,
+        callback_payload_meta=callback_payload_meta,
     ).model_dump()
 
     try:

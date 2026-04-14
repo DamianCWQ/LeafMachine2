@@ -19,6 +19,7 @@ from __future__ import annotations
 import csv
 import glob
 import logging
+import mimetypes
 import os
 import re
 import sys
@@ -27,7 +28,7 @@ from pathlib import Path
 
 from api import callbacks
 from api.config import settings
-from api.schemas import JobStatus
+from api.schemas import CallbackPayloadMeta, JobStatus
 
 logger = logging.getLogger("lm2.runner")
 
@@ -67,6 +68,30 @@ _NUMERIC_MEAS_FIELDS: frozenset[str] = frozenset(
         "conversion_factor_applied",
         "aspect_ratio",
     }
+)
+
+_RESULT_FILE_EXTENSIONS: frozenset[str] = frozenset(
+    {
+        ".csv",
+        ".json",
+        ".png",
+        ".pdf",
+        ".jpg",
+        ".jpeg",
+    }
+)
+
+_MEAS_DB_FIELDS: tuple[str, ...] = (
+    "filename",
+    "component_name",
+    "component_type",
+    "area",
+    "perimeter",
+    "bbox_min_long_side",
+    "bbox_min_short_side",
+    "units",
+    "conversion_factor_applied",
+    "aspect_ratio",
 )
 
 
@@ -135,11 +160,105 @@ def _collect_results(output_path: str) -> list[str]:
     base = Path(output_path)
     if not base.exists():
         return []
-    return [
-        str(p.relative_to(base))
-        for p in base.rglob("*")
-        if p.is_file() and p.suffix.lower() in {".csv", ".json", ".png", ".pdf"}
-    ]
+
+    files: list[str] = []
+    for p in sorted(base.rglob("*")):
+        if not p.is_file() or p.suffix.lower() not in _RESULT_FILE_EXTENSIONS:
+            continue
+        # Normalize to POSIX separators so callback consumers can treat paths uniformly.
+        files.append(str(p.relative_to(base)).replace("\\", "/"))
+    return files
+
+
+def _infer_artifact_kind(relative_path: str, extension: str) -> tuple[str, str]:
+    """Infer a stable artifact classification from path and extension."""
+    rel = relative_path.lower()
+
+    if rel.endswith("_measurements.csv") or "/data/measurements/" in rel:
+        return "measurements_csv", "table"
+    if rel.endswith("_ruler.csv"):
+        return "ruler_csv", "table"
+    if rel.endswith("_efd.csv"):
+        return "efd_csv", "table"
+    if rel.endswith("_landmarks.csv"):
+        return "landmarks_csv", "table"
+
+    if "segmentation" in rel:
+        if extension in {".jpg", ".jpeg", ".png"}:
+            return "segmentation_image", "image"
+        if extension == ".json":
+            return "segmentation_json", "json"
+        if extension == ".pdf":
+            return "segmentation_report_pdf", "document"
+
+    if extension == ".csv":
+        return "table_csv", "table"
+    if extension == ".json":
+        return "json_document", "json"
+    if extension in {".jpg", ".jpeg", ".png"}:
+        return "image", "image"
+    if extension == ".pdf":
+        return "pdf", "document"
+    return "other", "other"
+
+
+def _collect_result_artifacts(output_path: str) -> list[dict]:
+    """Return structured artifact metadata for callback persistence."""
+    base = Path(output_path)
+    if not base.exists():
+        return []
+
+    artifacts: list[dict] = []
+    for p in sorted(base.rglob("*")):
+        if not p.is_file():
+            continue
+        extension = p.suffix.lower()
+        if extension not in _RESULT_FILE_EXTENSIONS:
+            continue
+
+        rel = str(p.relative_to(base)).replace("\\", "/")
+        kind, media_type = _infer_artifact_kind(rel, extension)
+        mime_type = mimetypes.guess_type(rel)[0]
+        try:
+            size_bytes = p.stat().st_size
+        except OSError:
+            size_bytes = None
+
+        artifacts.append(
+            {
+                "path": rel,
+                "kind": kind,
+                "media_type": media_type,
+                "extension": extension,
+                "mime_type": mime_type,
+                "size_bytes": size_bytes,
+            }
+        )
+
+    return artifacts
+
+
+def _build_measurement_records(results_data: list[dict]) -> list[dict]:
+    """Build a normalized measurement payload for downstream DB persistence."""
+    records: list[dict] = []
+    for row in results_data:
+        record: dict = {}
+        for key in _MEAS_DB_FIELDS:
+            record[key] = row.get(key)
+        records.append(record)
+    return records
+
+
+def _truncate_payload(items: list, max_items: int) -> tuple[list, int]:
+    """Return payload list clipped to max_items and the number of dropped items.
+
+    A non-positive max_items means "no limit".
+    """
+    if max_items <= 0:
+        return items, 0
+    if len(items) <= max_items:
+        return items, 0
+    return items[:max_items], len(items) - max_items
 
 
 def _parse_results_csv(output_path: str, run_name: str) -> list[dict]:
@@ -261,10 +380,74 @@ def run_job(job_id: str, input_dir: str, run_name: str, config_overrides: dict) 
         return
 
     # ── Report success ───────────────────────────────────────────────────────
-    result_files = _collect_results(output_path)
-    results_data = _parse_results_csv(output_path, safe_run_name)
-    logger.info("Job %s completed. %d result files.", job_id, len(result_files))
-    callbacks.post_final(job_id, JobStatus.completed, result_files, output_path, results_data=results_data)
+    all_result_files = _collect_results(output_path)
+    all_results_data = _parse_results_csv(output_path, safe_run_name)
+    all_measurement_records = _build_measurement_records(all_results_data)
+    all_result_artifacts = _collect_result_artifacts(output_path) if settings.CALLBACK_INCLUDE_RESULT_ARTIFACTS else []
+
+    result_files, dropped_result_files = _truncate_payload(all_result_files, settings.CALLBACK_MAX_RESULT_FILES)
+    results_data, dropped_results_data = _truncate_payload(all_results_data, settings.CALLBACK_MAX_RESULTS_DATA)
+    measurement_records, dropped_measurement_records = _truncate_payload(
+        all_measurement_records,
+        settings.CALLBACK_MAX_MEASUREMENT_RECORDS,
+    )
+
+    result_artifacts: list[dict] | None = None
+    dropped_result_artifacts = 0
+    if settings.CALLBACK_INCLUDE_RESULT_ARTIFACTS:
+        result_artifacts, dropped_result_artifacts = _truncate_payload(
+            all_result_artifacts,
+            settings.CALLBACK_MAX_RESULT_ARTIFACTS,
+        )
+
+    callback_meta = CallbackPayloadMeta(
+        result_files_total=len(all_result_files),
+        result_files_sent=len(result_files),
+        result_files_truncated=dropped_result_files > 0,
+        results_data_total=len(all_results_data),
+        results_data_sent=len(results_data),
+        results_data_truncated=dropped_results_data > 0,
+        measurement_records_total=len(all_measurement_records),
+        measurement_records_sent=len(measurement_records),
+        measurement_records_truncated=dropped_measurement_records > 0,
+        result_artifacts_total=len(all_result_artifacts),
+        result_artifacts_sent=len(result_artifacts or []),
+        result_artifacts_truncated=dropped_result_artifacts > 0,
+    )
+
+    if (
+        dropped_result_files
+        or dropped_results_data
+        or dropped_measurement_records
+        or dropped_result_artifacts
+    ):
+        logger.warning(
+            "Callback payload for job %s was truncated "
+            "(files=%d, results_data=%d, measurement_records=%d, artifacts=%d)",
+            job_id,
+            dropped_result_files,
+            dropped_results_data,
+            dropped_measurement_records,
+            dropped_result_artifacts,
+        )
+
+    logger.info(
+        "Job %s completed. result_files=%d, measurements=%d, artifacts=%d",
+        job_id,
+        len(result_files),
+        len(measurement_records),
+        len(result_artifacts or []),
+    )
+    callbacks.post_final(
+        job_id,
+        JobStatus.completed,
+        result_files,
+        output_path,
+        results_data=results_data,
+        measurement_records=measurement_records,
+        result_artifacts=result_artifacts,
+        callback_payload_meta=callback_meta.model_dump(),
+    )
 
 
 # ── Public validate helper (called by routers before enqueueing) ─────────────
