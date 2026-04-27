@@ -96,8 +96,8 @@ leafmachine:
   plant_component_segmentation:
     enable: true
     sam2_model_config: 'sam2\sam2_configs\sam2_hiera_l.yaml'
-    sam2_checkpoint: 'weights\sam2\sam2_hiera_large.pt'
-    plantsam_checkpoint: 'weights\plantsam\BBS2_1024_2_epoch5.torch'
+    sam2_checkpoint: 'models\sam2_hiera_large.pt'
+    plantsam_checkpoint: 'models\BBS2_1024_2_epoch5.torch'
     segment_classes:
     - 2
     - 3

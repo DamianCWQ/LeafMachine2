@@ -225,6 +225,6 @@ dmypy.json
 # API stuff
 outputs/
 uploads/
-weights/plantsam/BBS2_1024_2_epoch5.torch
-weights/sam2/sam2_hiera_large.pt
+models/BBS2_1024_2_epoch5.torch
+models/sam2_hiera_large.pt
 sam2/

@@ -45,6 +45,25 @@ uv pip install torch==2.3.1 torchvision==0.18.1 torchaudio==2.3.1 --index-url ht
 
 ---
 
+## PlantSAM components
+### 1. Install Dependancies
+```
+git clone https://github.com/facebookresearch/sam2.git
+cd sam2
+git checkout 86827e2fbae8a293f61d51caa70a4b0602c04454
+pip install --no-build-isolation -e .
+```
+### 2. Downloading Models
+```
+mkdir models
+```
+**SAM2 model weights** : [Download the model here](https://drive.google.com/file/d/1WN0pzBcQLIEF3TIMNj9JC7THtsnvds2i/view?usp=sharing)
+
+**PlantSAM2** : [Download the model here](https://drive.google.com/file/d/1b57wlX9tCHRp4h92or41aRnBLA38rEfg/view?usp=sharing)
+
+**YOLOv10** : [Download the model here](https://drive.google.com/file/d/1o-UcVMxktZQuz5DafjSR4T72gimdtujW/view?usp=sharing)
+
+
 ## Troubleshooting
 **Manual Installation Issues:**
 - Ensure Python 3.11 is installed (not 3.12+)
