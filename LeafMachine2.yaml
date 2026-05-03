@@ -73,8 +73,8 @@ leafmachine:
     elliptic_fourier_descriptor_order: 40
     find_minimum_bounding_box: true
     generate_overlay: true
-    keep_only_best_one_leaf_one_petiole: false
-    minimum_confidence_threshold: 0.7
+    keep_only_best_one_leaf_one_petiole: true
+    minimum_confidence_threshold: 0.8
     overlay_background_color: black
     overlay_dpi: 300
     overlay_line_width: 1
@@ -96,8 +96,8 @@ leafmachine:
   plant_component_segmentation:
     enable: true
     sam2_model_config: 'sam2\sam2_configs\sam2_hiera_l.yaml'
-    sam2_checkpoint: 'weights\sam2\sam2_hiera_large.pt'
-    plantsam_checkpoint: 'weights\plantsam\BBS2_1024_2_epoch5.torch'
+    sam2_checkpoint: 'models\sam2_hiera_large.pt'
+    plantsam_checkpoint: 'models\BBS2_1024_2_epoch5.torch'
     segment_classes:
     - 2
     - 3
@@ -184,13 +184,13 @@ leafmachine:
     verbose: true
   project:
     GBIF_mode: all
-    accept_only_ideal_leaves: false # Can be set to false to include leaves with some damage, but may result in more noisy data. If true, only leaves with no damage and no occlusions will be included.
+    accept_only_ideal_leaves: true # Can be set to false to include leaves with some damage, but may result in more noisy data. If true, only leaves with no damage and no occlusions will be included.
     batch_size: 50
     censor_archival_components: true
     device: cuda
-    dir_images_local: D:\fyp_dataset\single_img
+    dir_images_local: D:\fyp_dataset\leaf_measurement_test
     dir_images_subset: ''
-    dir_output: D:\fyp_dataset\outputs\single_img
+    dir_output: D:\fyp_dataset\outputs\leafmachine_test
     hide_archival_components:
     - ruler
     - barcode
