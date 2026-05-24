@@ -138,7 +138,7 @@ def _collect_results(output_path: str) -> list[str]:
     return [
         str(p.relative_to(base))
         for p in base.rglob("*")
-        if p.is_file() and p.suffix.lower() in {".csv", ".json", ".png", ".pdf"}
+        if p.is_file() and p.suffix.lower() in {".csv", ".json", ".png", ".jpg", ".jpeg", ".pdf"}
     ]
 
 

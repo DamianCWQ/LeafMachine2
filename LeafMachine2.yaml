@@ -58,13 +58,13 @@ leafmachine:
     detector_type: Landmark_Detector_YOLO
     detector_version: Landmarks_Arm_A_200
     detector_weights: last.pt
-    do_save_QC_images: false # set true to save images with detected landmarks drawn on them for quality control purposes. These images will be saved in a separate folder and can be used to visually inspect the performance of the landmark detector.
-    do_save_final_images: false # set true to save images with final landmark detections drawn on them. These images will be saved in a separate folder and can be used for visual inspection of the final landmark detections after any post-processing steps.
-    do_save_prediction_overlay_images: false # set true to save images with the predicted landmarks overlaid on the original image. These images will be saved in a separate folder and can be used to visually inspect the performance of the landmark detector and the quality of the predictions.
+    do_save_QC_images: true # set true to save images with detected landmarks drawn on them for quality control purposes. These images will be saved in a separate folder and can be used to visually inspect the performance of the landmark detector.
+    do_save_final_images: true # set true to save images with final landmark detections drawn on them. These images will be saved in a separate folder and can be used for visual inspection of the final landmark detections after any post-processing steps.
+    do_save_prediction_overlay_images: true # set true to save images with the predicted landmarks overlaid on the original image. These images will be saved in a separate folder and can be used to visually inspect the performance of the landmark detector and the quality of the predictions.
     do_show_QC_images: true
     do_show_final_images: true
     ignore_objects_for_overlay: []
-    minimum_confidence_threshold: 0.06
+    minimum_confidence_threshold: 0.02
     upscale_factor: 10
     use_existing_landmark_detections: null
   leaf_segmentation:
@@ -184,13 +184,13 @@ leafmachine:
     verbose: true
   project:
     GBIF_mode: all
-    accept_only_ideal_leaves: false # Can be set to false to include leaves with some damage, but may result in more noisy data. If true, only leaves with no damage and no occlusions will be included.
+    accept_only_ideal_leaves: true # Can be set to false to include leaves with some damage, but may result in more noisy data. If true, only leaves with no damage and no occlusions will be included.
     batch_size: 50
     censor_archival_components: true
     device: cuda
-    dir_images_local: D:\fyp_dataset\single_img
+    dir_images_local: D:\TEST_HERE\test_set_only_leaves\low-resolution
     dir_images_subset: ''
-    dir_output: D:\fyp_dataset\outputs\single_img
+    dir_output: D:\TEST_HERE\output_test_set\low-resolution
     hide_archival_components:
     - ruler
     - barcode
@@ -220,9 +220,9 @@ leafmachine:
     use_existing_plant_component_detections: null
   ruler_detection:
     detect_ruler_type: true
-    minimum_confidence_threshold: 0.5
+    minimum_confidence_threshold: 0.4
     ruler_binary_detector: model_scripted_resnet_720_withCompression.pt
     ruler_detector: ruler_classifier_38classes_v-1.pt
     save_ruler_processed: false
-    save_ruler_validation: false
+    save_ruler_validation: true
     save_ruler_validation_summary: true

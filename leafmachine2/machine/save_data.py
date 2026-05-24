@@ -175,7 +175,10 @@ class Data_Vault():
             df_ruler_use = df_ruler
         else:
             ## *** CODE TO PICK THE BEST....
-            if df_ruler['ruler_class_confidence'].notna().any():
+            # Prioritize successful rulers, then sort by confidence
+            if 'ruler_success' in df_ruler.columns and 'ruler_class_confidence' in df_ruler.columns:
+                df_ruler_use = df_ruler.sort_values(by=['ruler_success', 'ruler_class_confidence'], ascending=False).iloc[0]
+            elif df_ruler['ruler_class_confidence'].notna().any():
                 df_ruler_use = df_ruler.sort_values(by='ruler_class_confidence', ascending=False).iloc[0]
             else:
                 df_ruler_use = df_ruler.iloc[0]
@@ -895,7 +898,7 @@ class Data_Vault():
                 'ruler_image_name': ['no_ruler'],
                 'ruler_location': ['NA'],
                 
-                'ruler_success': ['False'],
+                'ruler_success': [False],
                 'conversion_mean': ['NA'],
                 'predicted_conversion_factor_cm': ['NA'],
                 'pooled_sd': ['NA'],
@@ -934,7 +937,7 @@ class Data_Vault():
                         'ruler_image_name': ['no_ruler'],
                         'ruler_location': ['NA'],
 
-                        'ruler_success': ['False'],
+                        'ruler_success': [False],
                         'conversion_mean': ['NA'],
                         'predicted_conversion_factor_cm': ['NA'],
                         'pooled_sd': ['NA'],
@@ -994,7 +997,7 @@ class Data_Vault():
                         'ruler_location': [ruler_location],
                         
                         # All from ruler data
-                        'ruler_success': self.extract_value_from_dataframe(ruler_data_part, 'success'),
+                        'ruler_success': [self.extract_value_from_dataframe(ruler_data_part, 'success')],
                         'conversion_mean': self.extract_value_from_dataframe(ruler_data_part, 'conversion_mean'),
                         'predicted_conversion_factor_cm': self.extract_value_from_dataframe(ruler_data_part, 'predicted_conversion_factor_cm'),
                         'pooled_sd': self.extract_value_from_dataframe(ruler_data_part, 'pooled_sd'),

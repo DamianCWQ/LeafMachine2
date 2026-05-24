@@ -305,6 +305,7 @@ class _SAM2Segmenter:
         self._predictor_cls = SAM2ImagePredictor
         self._cpu_fallback_triggered = False
         self._active_image_token = None
+        self._active_image_shape = None
         self.specialization_fallback_to_base = bool(specialization_fallback_to_base)
         self.specialization_requested = bool(specialization_requested)
         self.specialization_checkpoint_present = bool(specialization_checkpoint_present)
@@ -477,6 +478,7 @@ class _SAM2Segmenter:
             raise
         finally:
             self._active_image_token = None
+            self._active_image_shape = None
 
     def _fallback_to_cpu(self):
         if self._cpu_fallback_triggered or self._device == 'cpu':
@@ -492,6 +494,7 @@ class _SAM2Segmenter:
         target_model.to('cpu')
         self._predictor = self._predictor_cls(target_model)
         self._active_image_token = None
+        self._active_image_shape = None
         self._cpu_fallback_triggered = True
         return True
 
@@ -525,7 +528,9 @@ class _SAM2Segmenter:
         return nullcontext()
 
     def _ensure_image_embeddings(self, image_rgb, image_token):
-        if self._active_image_token == image_token:
+        # Guard against CPython id() reuse: same address after gc can produce same token
+        # for a different image. Also compare shape to force re-embed on size change.
+        if self._active_image_token == image_token and self._active_image_shape == image_rgb.shape:
             return
 
         sdp_context = self._make_sdp_context()
@@ -536,6 +541,7 @@ class _SAM2Segmenter:
                 with sdp_context:
                     self._predictor.set_image(image_rgb)
             self._active_image_token = image_token
+            self._active_image_shape = image_rgb.shape
             return
         except RuntimeError as exc:
             if not self._is_cuda_kernel_error(exc):
@@ -547,6 +553,7 @@ class _SAM2Segmenter:
 
         self._predictor.set_image(image_rgb)
         self._active_image_token = image_token
+        self._active_image_shape = image_rgb.shape
 
     def _load_plantsam_weights(self, plantsam_checkpoint_path, logger):
         checkpoint = torch.load(plantsam_checkpoint_path, map_location='cpu')
@@ -642,6 +649,7 @@ class _SAM2Segmenter:
             self._cuda_enable_cudnn_sdpa = False
             self._configure_cuda_sdpa_backend()
             self._active_image_token = None
+            self._active_image_shape = None
             return True
 
         if self._force_sam2_math_attention():
@@ -657,6 +665,7 @@ class _SAM2Segmenter:
         self._cuda_sdpa_mode = 'auto'
         self._configure_cuda_sdpa_backend()
         self._active_image_token = None
+        self._active_image_shape = None
         return True
 
     def _force_sam2_math_attention(self):
@@ -686,6 +695,7 @@ class _SAM2Segmenter:
             'Retrying once with SAM2 math attention enabled.'
         )
         self._active_image_token = None
+        self._active_image_shape = None
         return True
 
 

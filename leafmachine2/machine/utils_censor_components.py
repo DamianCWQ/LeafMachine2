@@ -89,18 +89,36 @@ def censor_archival_components(cfg, time_report, logger, dir_home, Project, Dirs
     path_archival_labels = os.path.join(Dirs.path_archival_components, 'labels')
     label_files = glob.glob(os.path.join(path_archival_labels, '*.txt'))
 
+    if not label_files:
+        t_remove = "[Removing Archival Components elapsed time] 0 seconds (0 minutes)"
+        logger.info("No archival component labels found; skipping censor step.")
+        time_report['t_remove'] = t_remove
+        return time_report
+
     # Extract paths as strings to avoid pickling issues with custom objects
     dir_images = Project.dir_images
     dir_save = Dirs.censor_archival_components
 
     # Split the list of label files into chunks for each worker
-    num_workers = os.cpu_count()  # Number of available CPU cores
-    chunks = [label_files[i::num_workers] for i in range(num_workers)]
+    num_workers_cfg = cfg.get('leafmachine', {}).get('project', {}).get('num_workers')
+    if num_workers_cfg is None:
+        num_workers = os.cpu_count() or 1
+    else:
+        try:
+            num_workers = int(num_workers_cfg)
+        except (TypeError, ValueError):
+            num_workers = 1
 
-    with ProcessPoolExecutor(max_workers=num_workers) as executor:
-        futures = [executor.submit(process_files, cfg, dir_images, dir_save, path_archival_labels, chunk) for chunk in chunks]
-        for future in futures:
-            future.result()  # Wait for all futures to complete
+    num_workers = max(1, min(num_workers, len(label_files)))
+
+    if num_workers == 1:
+        process_files(cfg, dir_images, dir_save, path_archival_labels, label_files)
+    else:
+        chunks = [label_files[i::num_workers] for i in range(num_workers)]
+        with ProcessPoolExecutor(max_workers=num_workers) as executor:
+            futures = [executor.submit(process_files, cfg, dir_images, dir_save, path_archival_labels, chunk) for chunk in chunks]
+            for future in futures:
+                future.result()  # Wait for all futures to complete
 
     # return counts
     t2_stop = perf_counter()

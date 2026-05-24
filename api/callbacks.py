@@ -115,8 +115,6 @@ def post_final(
         with httpx.Client(timeout=_TIMEOUT) as client:
             resp = client.post(_callback_url(job_id), json=payload, headers=callback_headers())
             _mark_callbacks_disabled_for_auth(resp.status_code)
-            if resp.status_code >= 400:
-                logger.error("Final callback returned HTTP %s for job %s", resp.status_code, job_id)
             resp.raise_for_status()
             logger.info("Final callback delivered for job %s (HTTP %s)", job_id, resp.status_code)
     except Exception as exc:
